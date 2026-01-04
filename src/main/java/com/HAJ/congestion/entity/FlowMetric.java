@@ -14,44 +14,34 @@ public class FlowMetric {
     @Column(nullable = false)
     private LocalDateTime timestamp;
 
-    @Column(nullable = false)
-    private String flowId;
-
     private Double rttMs;
-
     private Double throughputMbps;
-
     private Double packetLossRate;
-
     private Double cwnd;
-
     private Double sendingRateMbps;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "experiment_id", nullable = false)
-    private Experiment experiment;
+    @JoinColumn(name = "flow_id", nullable = false)
+    private Flow flow;
 
     /* ---------- Constructors ---------- */
 
-    public FlowMetric() {
-    }
+    public FlowMetric() {}
 
     public FlowMetric(LocalDateTime timestamp,
-                      String flowId,
                       Double rttMs,
                       Double throughputMbps,
                       Double packetLossRate,
                       Double cwnd,
                       Double sendingRateMbps,
-                      Experiment experiment) {
+                      Flow flow) {
         this.timestamp = timestamp;
-        this.flowId = flowId;
         this.rttMs = rttMs;
         this.throughputMbps = throughputMbps;
         this.packetLossRate = packetLossRate;
         this.cwnd = cwnd;
         this.sendingRateMbps = sendingRateMbps;
-        this.experiment = experiment;
+        this.flow = flow;
     }
 
     /* ---------- Getters ---------- */
@@ -62,10 +52,6 @@ public class FlowMetric {
 
     public LocalDateTime getTimestamp() {
         return timestamp;
-    }
-
-    public String getFlowId() {
-        return flowId;
     }
 
     public Double getRttMs() {
@@ -88,7 +74,7 @@ public class FlowMetric {
         return sendingRateMbps;
     }
 
-    public Experiment getExperiment() {
-        return experiment;
+    public Flow getFlow() {
+        return flow;
     }
 }

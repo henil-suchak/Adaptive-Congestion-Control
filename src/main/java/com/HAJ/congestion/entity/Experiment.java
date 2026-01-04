@@ -2,6 +2,7 @@ package com.HAJ.congestion.entity;
 
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Entity
 @Table(name = "experiments")
@@ -34,6 +35,10 @@ public class Experiment {
 
     private LocalDateTime endTime;
 
+    @OneToMany(mappedBy = "experiment",
+            cascade = CascadeType.ALL,
+            orphanRemoval = true)
+    private List<Flow> flows;
     /* ---------- Constructors ---------- */
 
     public Experiment() {

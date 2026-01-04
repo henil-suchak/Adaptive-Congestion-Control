@@ -1,6 +1,7 @@
 package com.HAJ.congestion.entity;
 
 import jakarta.persistence.*;
+import java.util.List;
 
 @Entity
 @Table(name = "flows")
@@ -17,11 +18,14 @@ public class Flow {
     private String receiver;
 
     @Column(nullable = false)
-    private String protocol;   // TCP Reno, Cubic, BBR, etc.
+    private String protocol;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "experiment_id", nullable = false)
     private Experiment experiment;
+
+    @OneToMany(mappedBy = "flow", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<FlowMetric> metrics;
 
     /* ---------- Constructors ---------- */
 
@@ -54,5 +58,9 @@ public class Flow {
 
     public Experiment getExperiment() {
         return experiment;
+    }
+
+    public List<FlowMetric> getMetrics() {
+        return metrics;
     }
 }
