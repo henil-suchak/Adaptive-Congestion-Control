@@ -60,6 +60,10 @@ public class Flow {
         return experiment;
     }
 
+    public void setExperiment(Experiment experiment) {
+        this.experiment = experiment;
+    }
+
     public List<FlowMetric> getMetrics() {
         return metrics;
     }
