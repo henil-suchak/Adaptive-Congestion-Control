@@ -10,5 +10,5 @@ public interface FlowRepository extends JpaRepository<Flow, Long> {
 
     List<Flow> findByExperiment_ExperimentId(Long experimentId);
 
-    Optional<Flow> findByFlowId(String flowId);
+    Optional<Flow> findByFlowId(Long flowId);
 }

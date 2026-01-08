@@ -4,13 +4,12 @@ import com.HAJ.congestion.entity.Experiment;
 import com.HAJ.congestion.entity.Flow;
 import com.HAJ.congestion.repository.ExperimentRepository;
 import com.HAJ.congestion.repository.FlowRepository;
-import com.HAJ.congestion.service.FlowService;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
 
 @Service
-public class FlowServiceImpl implements FlowService {
+public class FlowServiceImpl implements com.HAJ.congestion.service.FlowService {
 
     private final FlowRepository flowRepository;
     private final ExperimentRepository experimentRepository;

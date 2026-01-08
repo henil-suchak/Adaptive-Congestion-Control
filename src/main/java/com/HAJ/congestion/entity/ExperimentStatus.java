@@ -2,7 +2,7 @@ package com.HAJ.congestion.entity;
 
 public enum ExperimentStatus {
     CREATED,
-    RUNNIG,
+    RUNNING,
     COMPLETED,
     FAILED
 }
