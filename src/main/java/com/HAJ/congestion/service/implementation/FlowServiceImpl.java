@@ -1,4 +1,4 @@
-package com.HAJ.congestion.service.impl;
+package com.HAJ.congestion.service.implementation;
 
 import com.HAJ.congestion.entity.Experiment;
 import com.HAJ.congestion.entity.Flow;
