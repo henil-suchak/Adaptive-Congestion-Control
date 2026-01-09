@@ -35,7 +35,7 @@ public class FlowServiceImpl implements com.HAJ.congestion.service.FlowService {
     }
 
     @Override
-    public Flow getFlowByFlowId(String flowId) {
+    public Flow getFlowByFlowId(long flowId) {
         return flowRepository.findByFlowId(flowId)
                 .orElseThrow(() -> new RuntimeException("Flow not found"));
     }

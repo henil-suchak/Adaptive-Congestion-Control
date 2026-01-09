@@ -11,5 +11,5 @@ public interface FlowService {
 
     List<Flow> getFlowsByExperiment(Long experimentId);
 
-    Flow getFlowByFlowId(String flowId);
+    Flow getFlowByFlowId(long flowId);
 }
