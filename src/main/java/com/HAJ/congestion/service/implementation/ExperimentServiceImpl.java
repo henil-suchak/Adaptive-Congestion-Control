@@ -51,4 +51,10 @@ public class ExperimentServiceImpl implements com.HAJ.congestion.service.Experim
         experiment.setEndTime(LocalDateTime.now());
         experimentRepository.save(experiment);
     }
+    @Override
+    public Experiment getExperimentById(Long experimentId) {
+        return experimentRepository.findById(experimentId)
+                .orElseThrow(() -> new RuntimeException("Experiment not found"));
+    }
+
 }
