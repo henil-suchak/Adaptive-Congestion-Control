@@ -17,7 +17,7 @@ public class FlowMetric {
     private Double rttMs;
     private Double throughputMbps;
     private Double packetLossRate;
-    private Double cwnd;
+    private Double cwndBytes;
     private Double sendingRateMbps;
 
     @ManyToOne(fetch = FetchType.LAZY)
@@ -39,7 +39,7 @@ public class FlowMetric {
         this.rttMs = rttMs;
         this.throughputMbps = throughputMbps;
         this.packetLossRate = packetLossRate;
-        this.cwnd = cwnd;
+        this.cwndBytes = cwnd;
         this.sendingRateMbps = sendingRateMbps;
         this.flow = flow;
     }
@@ -66,8 +66,8 @@ public class FlowMetric {
         return packetLossRate;
     }
 
-    public Double getCwnd() {
-        return cwnd;
+    public Double getCwndBytes() {
+        return cwndBytes;
     }
 
     public Double getSendingRateMbps() {
