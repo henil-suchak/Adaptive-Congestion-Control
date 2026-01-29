@@ -1,5 +1,6 @@
 package com.HAJ.congestion.entity;
 
+import com.fasterxml.jackson.annotation.JsonBackReference;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
@@ -20,6 +21,7 @@ public class FlowMetric {
     private Double cwndBytes;
     private Double sendingRateMbps;
 
+    @JsonBackReference
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "flow_id", nullable = false)
     private Flow flow;

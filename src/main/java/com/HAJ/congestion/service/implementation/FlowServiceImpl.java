@@ -1,15 +1,19 @@
 package com.HAJ.congestion.service.implementation;
 
 import com.HAJ.congestion.entity.Experiment;
+import com.HAJ.congestion.entity.ExperimentStatus;
 import com.HAJ.congestion.entity.Flow;
 import com.HAJ.congestion.repository.ExperimentRepository;
 import com.HAJ.congestion.repository.FlowRepository;
+import com.HAJ.congestion.service.FlowService;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
 
 @Service
-public class FlowServiceImpl implements com.HAJ.congestion.service.FlowService {
+public class FlowServiceImpl implements FlowService {
 
     private final FlowRepository flowRepository;
     private final ExperimentRepository experimentRepository;
@@ -22,8 +26,19 @@ public class FlowServiceImpl implements com.HAJ.congestion.service.FlowService {
 
     @Override
     public Flow createFlow(Long experimentId, Flow flow) {
+
         Experiment experiment = experimentRepository.findById(experimentId)
-                .orElseThrow(() -> new RuntimeException("Experiment not found"));
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "Experiment not found"
+                ));
+
+        if (experiment.getStatus() != ExperimentStatus.RUNNING) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Flows can only be created for RUNNING experiments"
+            );
+        }
 
         flow.setExperiment(experiment);
         return flowRepository.save(flow);
@@ -37,7 +52,9 @@ public class FlowServiceImpl implements com.HAJ.congestion.service.FlowService {
     @Override
     public Flow getFlowByFlowId(long flowId) {
         return flowRepository.findByFlowId(flowId)
-                .orElseThrow(() -> new RuntimeException("Flow not found"));
+                .orElseThrow(() -> new ResponseStatusException(
+                        HttpStatus.NOT_FOUND,
+                        "Flow not found"
+                ));
     }
 }
-

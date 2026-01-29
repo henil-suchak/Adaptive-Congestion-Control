@@ -8,28 +8,48 @@ import com.HAJ.congestion.entity.Prediction;
 import com.HAJ.congestion.repository.ModelMetadataRepository;
 import com.HAJ.congestion.repository.PredictionRepository;
 import com.HAJ.congestion.service.PredictionService;
+import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 
+@Service
 public class PredictionServiceImpl implements PredictionService {
+
     private final DummyCongestionModel dummyCongestionModel;
-    private  final PredictionRepository predictionRepository;
+    private final PredictionRepository predictionRepository;
     private final ModelMetadataRepository modelMetadataRepository;
 
-    public PredictionServiceImpl(DummyCongestionModel dummyCongestionModel,PredictionRepository predictionRepository,ModelMetadataRepository modelMetadataRepository){
-        this.dummyCongestionModel=dummyCongestionModel;
-        this.predictionRepository=predictionRepository;
-        this.modelMetadataRepository=modelMetadataRepository;
+    public PredictionServiceImpl(DummyCongestionModel dummyCongestionModel,
+                                 PredictionRepository predictionRepository,
+                                 ModelMetadataRepository modelMetadataRepository) {
+        this.dummyCongestionModel = dummyCongestionModel;
+        this.predictionRepository = predictionRepository;
+        this.modelMetadataRepository = modelMetadataRepository;
     }
+
     @Override
-    public Prediction generateAndSavePrediction(FlowMetric flowMetric){
-        PredictionResult predictionResult = dummyCongestionModel.predict(flowMetric);
+    public Prediction generateAndSavePrediction(FlowMetric flowMetric) {
 
-        ModelMetadata modelMetadata = modelMetadataRepository.findTopByOrderByCreatedAtDesc().orElseThrow(()-> new IllegalStateException("No ML Model Registerd."));
+        // Step 1: Run dummy ML model
+        PredictionResult result = dummyCongestionModel.predict(flowMetric);
 
-        Prediction prediction= new Prediction(
-                predictionResult.getPredictionRateMbps(),
-                predictionResult.getConfidence(),
+        // Step 2: Ensure model metadata exists (AUTO REGISTER)
+        ModelMetadata modelMetadata =
+                modelMetadataRepository.findTopByOrderByCreationTimeDesc()
+                        .orElseGet(() -> {
+                            ModelMetadata dummyModel = new ModelMetadata(
+                                    "v1.0",
+                                    "dummy-dataset.csv",
+                                    0.75,
+                                    LocalDateTime.now()
+                            );
+                            return modelMetadataRepository.save(dummyModel);
+                        });
+
+        // Step 3: Save prediction
+        Prediction prediction = new Prediction(
+                result.getPredictionRateMbps(),
+                result.getConfidence(),
                 LocalDateTime.now(),
                 flowMetric.getFlow(),
                 modelMetadata

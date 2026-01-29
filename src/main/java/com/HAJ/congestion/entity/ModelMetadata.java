@@ -15,15 +15,13 @@ public class ModelMetadata {
     private String modelVersion;
 
     @Column(nullable = false)
-    private String trainingDataset;  // e.g., ns3-cubic-v1.csv
+    private String trainingDataset;
 
     @Column(nullable = false)
     private Double accuracy;
 
     @Column(nullable = false)
     private LocalDateTime creationTime;
-
-    /* ---------- Constructors ---------- */
 
     public ModelMetadata() {}
 
@@ -36,8 +34,6 @@ public class ModelMetadata {
         this.accuracy = accuracy;
         this.creationTime = creationTime;
     }
-
-    /* ---------- Getters ---------- */
 
     public Long getModelId() {
         return modelId;

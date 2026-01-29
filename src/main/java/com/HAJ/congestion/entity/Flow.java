@@ -1,5 +1,8 @@
 package com.HAJ.congestion.entity;
 
+import com.fasterxml.jackson.annotation.JsonBackReference;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonManagedReference;
 import jakarta.persistence.*;
 import java.util.List;
 
@@ -20,10 +23,12 @@ public class Flow {
     @Column(nullable = false)
     private String protocol;
 
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "experiment_id", nullable = false)
+    @JsonBackReference
+    @ManyToOne
+    @JoinColumn(name = "experiment_id")
     private Experiment experiment;
 
+    @JsonManagedReference
     @OneToMany(mappedBy = "flow", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<FlowMetric> metrics;
 
