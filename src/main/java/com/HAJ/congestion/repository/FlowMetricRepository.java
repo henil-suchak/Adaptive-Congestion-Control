@@ -11,4 +11,6 @@ public interface FlowMetricRepository extends JpaRepository<FlowMetric,Long> {
     List<FlowMetric> findAllByFlowFlowId(Long flowId);
 
     List<FlowMetric> findByFlowExperimentExperimentId(Long experimentId);
+
+    List<FlowMetric> findTop50ByOrderByTimestampDesc();
 }

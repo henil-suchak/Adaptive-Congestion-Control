@@ -9,4 +9,6 @@ public interface FlowMetricService {
     FlowMetric recordFlowMetric(Long flowId, LocalDateTime timestamp, Double rttMs , Double throughputMbps , Double packetLossRate, Double cwnd, Double sendingRateMbps);
     List<FlowMetric> getMetricsForFlow(Long flowId);
     List<FlowMetric> getMetricForExperiment(Long experimentId);
+    List<FlowMetric> getLatestMetrics();
+
 }

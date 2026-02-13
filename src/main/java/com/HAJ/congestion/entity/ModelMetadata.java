@@ -15,25 +15,33 @@ public class ModelMetadata {
     private String modelVersion;
 
     @Column(nullable = false)
-    private String trainingDataset;
+    private String trainingDataset;  // e.g., ns3-cubic-v1.csv
 
     @Column(nullable = false)
     private Double accuracy;
 
-    @Column(nullable = false)
-    private LocalDateTime creationTime;
+    @Column(nullable = false, updatable = false)
+    private LocalDateTime createdAt;
+
+    /* ---------- Lifecycle Hook ---------- */
+    @PrePersist
+    protected void onCreate() {
+        this.createdAt = LocalDateTime.now();
+    }
+
+    /* ---------- Constructors ---------- */
 
     public ModelMetadata() {}
 
     public ModelMetadata(String modelVersion,
                          String trainingDataset,
-                         Double accuracy,
-                         LocalDateTime creationTime) {
+                         Double accuracy) {
         this.modelVersion = modelVersion;
         this.trainingDataset = trainingDataset;
         this.accuracy = accuracy;
-        this.creationTime = creationTime;
     }
+
+    /* ---------- Getters ---------- */
 
     public Long getModelId() {
         return modelId;
@@ -51,7 +59,7 @@ public class ModelMetadata {
         return accuracy;
     }
 
-    public LocalDateTime getCreationTime() {
-        return creationTime;
+    public LocalDateTime getCreatedAt() {
+        return createdAt;
     }
 }

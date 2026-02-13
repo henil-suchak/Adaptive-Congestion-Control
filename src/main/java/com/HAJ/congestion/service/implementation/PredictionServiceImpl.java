@@ -11,45 +11,26 @@ import com.HAJ.congestion.service.PredictionService;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
-
 @Service
 public class PredictionServiceImpl implements PredictionService {
-
     private final DummyCongestionModel dummyCongestionModel;
-    private final PredictionRepository predictionRepository;
+    private  final PredictionRepository predictionRepository;
     private final ModelMetadataRepository modelMetadataRepository;
 
-    public PredictionServiceImpl(DummyCongestionModel dummyCongestionModel,
-                                 PredictionRepository predictionRepository,
-                                 ModelMetadataRepository modelMetadataRepository) {
-        this.dummyCongestionModel = dummyCongestionModel;
-        this.predictionRepository = predictionRepository;
-        this.modelMetadataRepository = modelMetadataRepository;
+    public PredictionServiceImpl(DummyCongestionModel dummyCongestionModel,PredictionRepository predictionRepository,ModelMetadataRepository modelMetadataRepository){
+        this.dummyCongestionModel=dummyCongestionModel;
+        this.predictionRepository=predictionRepository;
+        this.modelMetadataRepository=modelMetadataRepository;
     }
-
     @Override
-    public Prediction generateAndSavePrediction(FlowMetric flowMetric) {
+    public Prediction generateAndSavePrediction(FlowMetric flowMetric){
+        PredictionResult predictionResult = dummyCongestionModel.predict(flowMetric);
 
-        // Step 1: Run dummy ML model
-        PredictionResult result = dummyCongestionModel.predict(flowMetric);
+        ModelMetadata modelMetadata = modelMetadataRepository.findTopByOrderByCreatedAtDesc().orElseThrow(()-> new IllegalStateException("No ML Model Registerd."));
 
-        // Step 2: Ensure model metadata exists (AUTO REGISTER)
-        ModelMetadata modelMetadata =
-                modelMetadataRepository.findTopByOrderByCreationTimeDesc()
-                        .orElseGet(() -> {
-                            ModelMetadata dummyModel = new ModelMetadata(
-                                    "v1.0",
-                                    "dummy-dataset.csv",
-                                    0.75,
-                                    LocalDateTime.now()
-                            );
-                            return modelMetadataRepository.save(dummyModel);
-                        });
-
-        // Step 3: Save prediction
-        Prediction prediction = new Prediction(
-                result.getPredictionRateMbps(),
-                result.getConfidence(),
+        Prediction prediction= new Prediction(
+                predictionResult.getPredictionRateMbps(),
+                predictionResult.getConfidence(),
                 LocalDateTime.now(),
                 flowMetric.getFlow(),
                 modelMetadata

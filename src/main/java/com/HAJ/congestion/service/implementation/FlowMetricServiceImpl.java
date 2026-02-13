@@ -43,4 +43,8 @@ public class FlowMetricServiceImpl implements FlowMetricService {
     public List<FlowMetric> getMetricForExperiment(Long experimentId){
         return flowMetricRepository.findByFlowExperimentExperimentId(experimentId);
     }
+    @Override
+    public List<FlowMetric> getLatestMetrics() {
+        return flowMetricRepository.findTop50ByOrderByTimestampDesc();
+    }
 }

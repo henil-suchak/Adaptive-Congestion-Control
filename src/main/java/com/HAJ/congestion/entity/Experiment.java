@@ -1,7 +1,5 @@
 package com.HAJ.congestion.entity;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
-import com.fasterxml.jackson.annotation.JsonManagedReference;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -37,8 +35,9 @@ public class Experiment {
 
     private LocalDateTime endTime;
 
-    @JsonManagedReference
-    @OneToMany(mappedBy = "experiment")
+    @OneToMany(mappedBy = "experiment",
+            cascade = CascadeType.ALL,
+            orphanRemoval = true)
     private List<Flow> flows;
     /* ---------- Constructors ---------- */
 
