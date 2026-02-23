@@ -13,18 +13,18 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDateTime;
 @Service
 public class PredictionServiceImpl implements PredictionService {
-    private final DummyCongestionModel dummyCongestionModel;
+    private final MlClientService mlClientService;
     private  final PredictionRepository predictionRepository;
     private final ModelMetadataRepository modelMetadataRepository;
 
-    public PredictionServiceImpl(DummyCongestionModel dummyCongestionModel,PredictionRepository predictionRepository,ModelMetadataRepository modelMetadataRepository){
-        this.dummyCongestionModel=dummyCongestionModel;
+    public PredictionServiceImpl(DummyCongestionModel dummyCongestionModel, MlClientService mlClientService, PredictionRepository predictionRepository, ModelMetadataRepository modelMetadataRepository){
+        this.mlClientService = mlClientService;
         this.predictionRepository=predictionRepository;
         this.modelMetadataRepository=modelMetadataRepository;
     }
     @Override
     public Prediction generateAndSavePrediction(FlowMetric flowMetric){
-        PredictionResult predictionResult = dummyCongestionModel.predict(flowMetric);
+        PredictionResult predictionResult = mlClientService.callMlModel(flowMetric);
 
         ModelMetadata modelMetadata = modelMetadataRepository.findTopByOrderByCreatedAtDesc().orElseThrow(()-> new IllegalStateException("No ML Model Registerd."));
 

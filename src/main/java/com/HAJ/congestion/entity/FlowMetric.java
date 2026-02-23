@@ -1,5 +1,6 @@
 package com.HAJ.congestion.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
@@ -13,7 +14,10 @@ public class FlowMetric {
 
     @Column(nullable = false)
     private LocalDateTime timestamp;
-
+    @PrePersist
+    public void prePersist() {
+        this.timestamp = LocalDateTime.now();
+    }
     private Double rttMs;
     private Double throughputMbps;
     private Double packetLossRate;
@@ -21,6 +25,7 @@ public class FlowMetric {
     private Double sendingRateMbps;
 
     @ManyToOne(fetch = FetchType.LAZY)
+    @JsonIgnore
     @JoinColumn(name = "flow_id", nullable = false)
     private Flow flow;
 

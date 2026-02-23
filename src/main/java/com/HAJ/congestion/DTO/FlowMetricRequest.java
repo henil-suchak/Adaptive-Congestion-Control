@@ -7,7 +7,7 @@ public class FlowMetricRequest {
     private Double rttMs;
     private Double throughputMbps;
     private Double packetLossRate;
-    private Double cwnd;
+    private Double cwndBytes;
     private Double sendingRateMbps;
 
     public LocalDateTime getTimestamp() {
@@ -26,8 +26,8 @@ public class FlowMetricRequest {
         return packetLossRate;
     }
 
-    public Double getCwnd() {
-        return cwnd;
+    public Double getCwndBytes() {
+        return cwndBytes;
     }
 
     public Double getSendingRateMbps() {

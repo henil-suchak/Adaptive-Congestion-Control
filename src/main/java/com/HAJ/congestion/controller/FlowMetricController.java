@@ -22,7 +22,7 @@ public class FlowMetricController {
     public FlowMetric recordFlowMetric(
             @PathVariable Long flowId,
             @RequestBody FlowMetricRequest flowMetricRequest){
-            FlowMetric flowMetric= flowMetricService.recordFlowMetric(flowId, flowMetricRequest.getTimestamp(),flowMetricRequest.getRttMs(),flowMetricRequest.getThroughputMbps(),flowMetricRequest.getPacketLossRate(),flowMetricRequest.getCwnd(),flowMetricRequest.getSendingRateMbps());
+            FlowMetric flowMetric= flowMetricService.recordFlowMetric(flowId, flowMetricRequest.getTimestamp(),flowMetricRequest.getRttMs(),flowMetricRequest.getThroughputMbps(),flowMetricRequest.getPacketLossRate(),flowMetricRequest.getCwndBytes(),flowMetricRequest.getSendingRateMbps());
             predictionService.generateAndSavePrediction(flowMetric);
             return flowMetric;
     }
