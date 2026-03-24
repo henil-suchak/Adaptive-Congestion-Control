@@ -1,0 +1,5 @@
+# Don't send these to Docker daemon
+node_modules/
+build/
+.git/
+.DS_Store

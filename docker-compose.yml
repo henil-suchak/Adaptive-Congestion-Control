@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  # ── Spring Boot Backend ────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      - backend-data:/app/data
+    networks:
+      - cc-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/metrics/latest"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── React Frontend ─────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_BACKEND_URL=http://localhost:8080
+    depends_on:
+      - backend
+    networks:
+      - cc-network
+
+  # ── ns-3 Simulation (interactive) ──────────────────
+  ns3-sim:
+    build:
+      context: .
+      dockerfile: ns3_files/Dockerfile
+    stdin_open: true    # Keep STDIN open for interactive use
+    tty: true           # Allocate a pseudo-TTY
+    depends_on:
+      - backend
+    networks:
+      - cc-network
+    volumes:
+      # Persist trained model checkpoints on host
+      - ./ns3_files/contrib/ns3-ai/examples/rl-tcp/checkpoints:/sim/ns-allinone-3.35/ns-3.35/contrib/ns3-ai/examples/rl-tcp/checkpoints
+
+networks:
+  cc-network:
+    driver: bridge
+
+volumes:
+  backend-data:

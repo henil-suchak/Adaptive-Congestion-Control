@@ -1,0 +1,13 @@
+# Don't send these to Docker daemon
+ns-allinone-3.35/
+ns-allinone-3.35.tar.bz2
+BackEnd/
+.git/
+.idea/
+.vscode/
+target/
+frontend/node_modules/
+frontend/build/
+data/
+*.log
+.DS_Store

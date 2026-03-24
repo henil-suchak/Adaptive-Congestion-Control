@@ -153,7 +153,46 @@ pip install stable_baselines3 numpy requests
 ./waf configure --enable-examples && ./waf build
 ```
 
-## Running the Full Pipeline
+## Quick Start with Docker (Recommended)
+
+> **Easiest way to run the entire project on any OS.** Only requires [Docker Desktop](https://www.docker.com/products/docker-desktop/).
+
+### Start Backend + Frontend
+
+```bash
+docker-compose up --build
+```
+
+This builds and starts:
+- **Backend** at http://localhost:8080
+- **Frontend** at http://localhost:3000
+
+### Run ns-3 Simulation / Training
+
+```bash
+# Open an interactive shell inside the ns-3 container
+docker-compose run ns3-sim bash
+
+# Inside the container — set up experiment in backend
+python contrib/ns3-ai/examples/rl-tcp/inference/setup_experiment.py \
+  --backend http://backend:8080/api
+
+# Run inference
+python contrib/ns3-ai/examples/rl-tcp/inference/run_inference.py \
+  --model contrib/ns3-ai/examples/rl-tcp/checkpoints/sac_tcp_1500000_steps.zip \
+  --duration=300 --log_every=20 --post_every=5
+
+# Or run training
+python contrib/ns3-ai/examples/rl-tcp/train_sac.py
+```
+
+> **Note:** First `docker-compose up --build` takes ~15 min (downloads ns-3, builds C++ code). Subsequent runs are instant.
+
+---
+
+## Running Without Docker (Manual Setup)
+
+
 
 Open **3 terminals**:
 
