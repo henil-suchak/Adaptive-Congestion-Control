@@ -1,5 +1,96 @@
+
+# ══════════════════════════════════════════════════════════
+#  CongestionControl — Root .gitignore
+# ══════════════════════════════════════════════════════════
+
+# ── Java / Maven ─────────────────────────────────────────
 target/
+*.class
+*.jar
+*.war
+*.ear
 *.log
-.DS_Store
+hs_err_pid*
+replay_pid*
+
+# ── Spring Boot ──────────────────────────────────────────
+data/*.mv.db
+data/*.trace.db
+data/*.lock.db
+
+# ── Node.js / React ─────────────────────────────────────
+node_modules/
+frontend/build/
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ── Python ───────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.so
+*.egg-info/
+*.egg
+dist/
+*.whl
+ns3env/
+venv/
+.venv/
+
+# ── ns-3 (ENTIRE installation — too large, 500MB+) ──────
+ns-allinone-3.35/
+ns-allinone-3.35.tar.bz2
+
+# ── Old backend copy (superseded by root src/) ───────────
+BackEnd/
+
+# ── IDE / Editor ─────────────────────────────────────────
 .idea/
+.vscode/
 *.iml
+*.iws
+*.ipr
+.project
+.classpath
+.settings/
+.factorypath
+*.swp
+*.swo
+*~
+
+# ── macOS ────────────────────────────────────────────────
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# ── Windows ──────────────────────────────────────────────
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ── Misc build & temp ───────────────────────────────────
+build/
+dist/
+*.log
+/tmp/
+*.tmp
+
+# ── Large / generated files ─────────────────────────────
+*.zip
+!ns3_files/contrib/ns3-ai/examples/rl-tcp/checkpoints/sac_tcp_1500000_steps.zip
+
+# ── Other project artifacts not needed in repo ───────────
+full_project_code.md
+backend_code.md
+agent.zip
+env-wrapper-ui/
+cc-frontend/
+.github/
+
+
