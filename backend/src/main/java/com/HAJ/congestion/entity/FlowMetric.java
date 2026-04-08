@@ -23,7 +23,8 @@ public class FlowMetric {
     private Double packetLossRate;
     private Double cwndBytes;
     private Double sendingRateMbps;
-
+    @Column(nullable = false)
+    private String algorithmType = "UNKNOWN";
     @ManyToOne(fetch = FetchType.LAZY)
     @JsonIgnore
     @JoinColumn(name = "flow_id", nullable = false)
@@ -47,6 +48,7 @@ public class FlowMetric {
         this.cwndBytes = cwnd;
         this.sendingRateMbps = sendingRateMbps;
         this.flow = flow;
+        this.algorithmType = "UNKNOWN";
     }
 
     /* ---------- Getters ---------- */
@@ -81,5 +83,12 @@ public class FlowMetric {
 
     public Flow getFlow() {
         return flow;
+    }
+    public String getAlgorithmType() {
+        return algorithmType;
+    }
+
+    public void setAlgorithmType(String algorithmType) {
+        this.algorithmType = algorithmType;
     }
 }

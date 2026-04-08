@@ -1,5 +1,7 @@
 package com.HAJ.congestion.entity;
 
+import com.fasterxml.jackson.annotation.JsonBackReference;
+import com.fasterxml.jackson.annotation.JsonManagedReference;
 import jakarta.persistence.*;
 import java.util.List;
 
@@ -20,10 +22,15 @@ public class Flow {
     @Column(nullable = false)
     private String protocol;
 
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "experiment_id", nullable = false)
+    @Column(nullable = false)
+    private String algorithmType = "UNKNOWN";
+
+    @JsonBackReference
+    @ManyToOne
+    @JoinColumn(name = "experiment_id")
     private Experiment experiment;
 
+    @JsonManagedReference
     @OneToMany(mappedBy = "flow", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<FlowMetric> metrics;
 
@@ -35,6 +42,14 @@ public class Flow {
         this.sender = sender;
         this.receiver = receiver;
         this.protocol = protocol;
+        this.experiment = experiment;
+    }
+
+    public Flow(String sender, String receiver, String protocol, String algorithmType, Experiment experiment) {
+        this.sender = sender;
+        this.receiver = receiver;
+        this.protocol = protocol;
+        this.algorithmType = algorithmType;
         this.experiment = experiment;
     }
 
@@ -52,6 +67,14 @@ public class Flow {
         return receiver;
     }
 
+    public void setFlowId(Long flowId) {
+        this.flowId = flowId;
+    }
+
+    public void setSender(String sender) {
+        this.sender = sender;
+    }
+
     public String getProtocol() {
         return protocol;
     }
@@ -66,5 +89,21 @@ public class Flow {
 
     public List<FlowMetric> getMetrics() {
         return metrics;
+    }
+
+    public void setReceiver(String receiver) {
+        this.receiver = receiver;
+    }
+
+    public void setProtocol(String tcp) {
+        this.protocol = tcp;
+    }
+
+    public String getAlgorithmType() {
+        return algorithmType;
+    }
+
+    public void setAlgorithmType(String algorithmType) {
+        this.algorithmType = algorithmType;
     }
 }

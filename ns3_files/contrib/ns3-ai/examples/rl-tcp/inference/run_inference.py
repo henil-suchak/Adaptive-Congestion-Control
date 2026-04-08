@@ -18,7 +18,6 @@ OBS_MAX    = np.array([1_400_000.0,200_000.0,250_000.0,100.0,1_500.0,1_400_000.0
 sys.path.insert(0, os.path.join(NS3_ROOT, 'contrib/ns3-ai/py_interface'))
 sys.path.insert(0, os.path.join(NS3_ROOT, 'contrib/ns3-ai/examples/rl-tcp/inference'))
 
-# ── Rolling history for summary stats ────────────────────────────────────────
 HISTORY = 100
 rtt_hist    = deque(maxlen=HISTORY)
 tput_hist   = deque(maxlen=HISTORY)
@@ -27,18 +26,17 @@ reward_hist = deque(maxlen=HISTORY)
 action_hist = deque(maxlen=HISTORY)
 loss_hist   = deque(maxlen=HISTORY)
 
+CUBIC_TRACE_FILE = '/tmp/cubic_metrics.csv'
 
-# ── Backend Lifecycle Manager ────────────────────────────────────────────────
 
 class BackendManager:
-    """Manages the complete Spring Boot backend lifecycle:
-       setup() → post_metric() × N → teardown()
-    """
+    """Manages the complete Spring Boot backend lifecycle for both SAC and CUBIC flows."""
 
     def __init__(self, base_url="http://localhost:8080/api"):
         self.base_url = base_url
         self.experiment_id = None
-        self.flow_id = None
+        self.sac_flow_id = None
+        self.cubic_flow_id = None
         self.available = True
         self._session = None
 
@@ -49,11 +47,7 @@ class BackendManager:
         return self._session
 
     def setup(self, model_path, duration):
-        """Called ONCE at inference start.
-        1. POST /api/experiments → get experiment_id
-        2. POST /api/experiments/{id}/start → set RUNNING
-        3. POST /api/experiments/{id}/flows → get flow_id
-        """
+        """Creates experiment and both flows (SAC + CUBIC)."""
         if not self.available:
             return
 
@@ -61,12 +55,11 @@ class BackendManager:
             s = self._get_session()
             model_name = os.path.basename(model_path)
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            exp_name = f"SAC Inference — {model_name} @ {ts}"
+            exp_name = f"SAC vs CUBIC — {model_name} @ {ts}"
 
-            # 1. Create experiment
             r = s.post(f"{self.base_url}/experiments", json={
                 "name": exp_name,
-                "topology": "dumbbell",
+                "topology": "dumbbell-dual",
                 "bottleneckBandwidthMbps": 2.0,
                 "baseDelayMs": 20.0,
                 "queueType": "FqCoDel"
@@ -76,36 +69,48 @@ class BackendManager:
             print(f"[backend] experiment created id={self.experiment_id}  "
                   f"name=\"{exp_name}\"", flush=True)
 
-            # 2. Start experiment
             r = s.post(f"{self.base_url}/experiments/{self.experiment_id}/start",
                        timeout=5.0)
             r.raise_for_status()
             print(f"[backend] experiment {self.experiment_id} → RUNNING", flush=True)
 
-            # 3. Create flow
+            # Flow 1: SAC
             r = s.post(f"{self.base_url}/experiments/{self.experiment_id}/flows",
                        json={
                            "sender": "10.1.1.1",
                            "receiver": "10.1.3.1",
-                           "protocol": "TCP-SAC-RL"
+                           "protocol": "TCP-SAC-RL",
+                           "algorithmType": "SAC"
                        }, timeout=5.0)
             r.raise_for_status()
-            self.flow_id = r.json()["flowId"]
-            print(f"[backend] flow created id={self.flow_id}  "
-                  f"(experiment={self.experiment_id})", flush=True)
+            self.sac_flow_id = r.json()["flowId"]
+            print(f"[backend] SAC flow created id={self.sac_flow_id}", flush=True)
+
+            # Flow 2: CUBIC
+            r = s.post(f"{self.base_url}/experiments/{self.experiment_id}/flows",
+                       json={
+                           "sender": "10.1.4.1",
+                           "receiver": "10.1.5.1",
+                           "protocol": "TCP-CUBIC",
+                           "algorithmType": "CUBIC"
+                       }, timeout=5.0)
+            r.raise_for_status()
+            self.cubic_flow_id = r.json()["flowId"]
+            print(f"[backend] CUBIC flow created id={self.cubic_flow_id}", flush=True)
 
         except Exception as e:
             self.available = False
             print(f"[backend] setup failed: {e} — continuing without backend",
                   flush=True)
 
-    def post_metric(self, env, reward, action_factor):
+    def post_metric(self, flow_id, algorithm_type, env, reward, action_factor):
         """Fire-and-forget POST to /api/metrics in background thread."""
-        if not self.available or self.flow_id is None:
+        if not self.available or flow_id is None:
             return
 
         payload = {
-            "flowId": self.flow_id,
+            "flowId": flow_id,
+            "algorithmType": algorithm_type,
             "rttMs": round(env['rtt_us'] / 1000.0, 3),
             "throughputMbps": round(env['throughput'] / 1e6, 6),
             "packetLossRate": round(float(env['packetLoss']) / 100.0, 4),
@@ -128,10 +133,8 @@ class BackendManager:
         threading.Thread(target=_post, daemon=True).start()
 
     def teardown(self):
-        """Called ONCE at inference end. Ends the experiment."""
         if not self.available or self.experiment_id is None:
             return
-
         try:
             s = self._get_session()
             r = s.post(
@@ -146,6 +149,90 @@ class BackendManager:
                       flush=True)
         except Exception as e:
             print(f"[backend] teardown error: {e}", flush=True)
+
+
+class CubicMetricsReader:
+    """Background thread that reads CUBIC metrics from the ns-3 trace file
+    and posts them to the backend."""
+
+    def __init__(self, trace_file, backend, post_interval=0.5):
+        self.trace_file = trace_file
+        self.backend = backend
+        self.post_interval = post_interval
+        self._stop = threading.Event()
+        self._thread = None
+        self._file_pos = 0
+
+    def start(self):
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        print(f"[cubic-reader] started monitoring {self.trace_file}", flush=True)
+
+    def stop(self):
+        self._stop.set()
+
+    def _run(self):
+        # Wait for the trace file to appear
+        while not self._stop.is_set():
+            if os.path.exists(self.trace_file):
+                break
+            time.sleep(0.5)
+
+        if self._stop.is_set():
+            return
+
+        # Skip the CSV header
+        time.sleep(1.0)
+
+        try:
+            with open(self.trace_file, 'r') as f:
+                # Skip header
+                f.readline()
+                self._file_pos = f.tell()
+
+                while not self._stop.is_set():
+                    line = f.readline()
+                    if not line:
+                        time.sleep(self.post_interval)
+                        continue
+
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    try:
+                        parts = line.split(',')
+                        if len(parts) < 7:
+                            continue
+
+                        time_s = float(parts[0])
+                        cwnd = float(parts[1])
+                        rtt_us = float(parts[2])
+                        throughput_bps = float(parts[3])
+                        loss = int(parts[4])
+                        seg_size = int(parts[5])
+                        bytes_in_flight = float(parts[6])
+
+                        env = {
+                            'rtt_us': rtt_us,
+                            'throughput': throughput_bps,
+                            'packetLoss': loss,
+                            'cWnd': cwnd,
+                        }
+
+                        self.backend.post_metric(
+                            self.backend.cubic_flow_id,
+                            "CUBIC",
+                            env,
+                            reward=0.0,
+                            action_factor=0.0
+                        )
+
+                    except (ValueError, IndexError) as e:
+                        continue
+
+        except Exception as e:
+            print(f"[cubic-reader] error: {e}", flush=True)
 
 
 # ── Reward / Observation / Action helpers ────────────────────────────────────
@@ -212,11 +299,11 @@ def print_dashboard(step, env, action, reward, backend):
 
     os.system('clear')
     print('╔══════════════════════════════════════════════════════════════╗')
-    print('║          SAC TCP Congestion Control — Live Inference         ║')
+    print('║      SAC vs CUBIC — Live Inference Comparison               ║')
     print('╠══════════════════════════════════════════════════════════════╣')
     print(f'║  Step : {step:<8d}   SimTime: {env["simTime_us"]/1e6:7.2f}s                    ║')
     print('╠══════════════════════════════════════════════════════════════╣')
-    print('║  CURRENT OBSERVATION                                         ║')
+    print('║  SAC FLOW OBSERVATION                                        ║')
     print(f'║  RTT        : {rtt_ms:8.2f} ms   {bar(rtt_ms,200)}  ║')
     print(f'║  Throughput : {tput_mbps:8.4f} Mbps {bar(tput_mbps,2.0)}  ║')
     print(f'║  cWnd       : {cwnd:8.0f} B    {bar(cwnd,340000)}  ║')
@@ -246,7 +333,8 @@ def print_dashboard(step, env, action, reward, backend):
             spark = '▄' * len(mini)
         print(f'║  cWnd trend : {spark:<20s}  min={mn:.0f} max={mx:.0f}  ║')
     if backend.available:
-        tag = f'● backend exp={backend.experiment_id} flow={backend.flow_id}'
+        tag = (f'● backend exp={backend.experiment_id} '
+               f'sac={backend.sac_flow_id} cubic={backend.cubic_flow_id}')
     else:
         tag = '○ backend offline'
     print(f'║  {tag:<56s}  ║')
@@ -266,6 +354,9 @@ def main():
     parser.add_argument('--backend_url',type=str,
                         default='http://localhost:8080/api',
                         help='Backend API base URL')
+    parser.add_argument('--cubic_trace',type=str,
+                        default=CUBIC_TRACE_FILE,
+                        help='Path to CUBIC metrics CSV (must match ns-3 --cubicTrace)')
     args=parser.parse_args()
 
     from stable_baselines3 import SAC
@@ -273,25 +364,27 @@ def main():
     model=SAC.load(args.model)
     print('[info] model loaded OK',flush=True)
 
-    # 1. Clear stale shm, then Init pool BEFORE launching ns-3.
+    # Clear stale shm and trace file
     os.system(f'ipcrm -M {SHM_ID} 2>/dev/null; true')
-    print(f'[info] cleared stale shm',flush=True)
+    if os.path.exists(args.cubic_trace):
+        os.remove(args.cubic_trace)
+    print(f'[info] cleared stale shm and CUBIC trace',flush=True)
 
     from shm_pool import Init
     Init(SHM_ID, SHM_SIZE)
     print('[info] shm pool initialized',flush=True)
 
-    # 2. Create wrapper
     from inference_wrapper import InferenceWrapper
     wrapper = InferenceWrapper(shm_id=SHM_ID, shm_size=SHM_SIZE)
     print('[info] wrapper created',flush=True)
 
-    # 3. Launch ns-3
+    # Launch ns-3 (now with --cubicTrace argument)
     ns3_env = os.environ.copy()
     ns3_env['NS_AI_KEY']  = str(SHM_ID)
     ns3_env['NS_AI_SIZE'] = str(SHM_SIZE)
-    ns3_cmd = [BINARY, f'--duration={args.duration}']
-    print(f'[info] launching ns3...', flush=True)
+    ns3_cmd = [BINARY, f'--duration={args.duration}',
+               f'--cubicTrace={args.cubic_trace}']
+    print(f'[info] launching ns3 (dual-flow: SAC + CUBIC)...', flush=True)
     ns3_log = open('/tmp/ns3_inference.log', 'w')
     ns3_proc = subprocess.Popen(ns3_cmd, stdout=ns3_log,
                                 stderr=subprocess.STDOUT, env=ns3_env)
@@ -304,17 +397,25 @@ def main():
         sys.exit(1)
     print(f'[info] ns3 running PID={ns3_proc.pid}  (log: /tmp/ns3_inference.log)',flush=True)
 
-    # 4. Setup backend (after ns3 starts, before inference loop)
+    # Setup backend with dual flows
     backend = BackendManager(base_url=args.backend_url)
     backend.setup(model_path=args.model, duration=args.duration)
 
-    print('[info] starting inference loop...',flush=True)
+    # Start CUBIC metrics reader (background thread reads trace file → backend)
+    cubic_reader = CubicMetricsReader(
+        trace_file=args.cubic_trace,
+        backend=backend,
+        post_interval=0.3
+    )
+    cubic_reader.start()
+
+    print('[info] starting inference loop (SAC + CUBIC)...',flush=True)
 
     step=0; last_new_cWnd=3400; last_new_ssThresh=65535
 
     def shutdown(sig=None, frame=None):
         print('\n[info] shutting down...',flush=True)
-        # End experiment in backend
+        cubic_reader.stop()
         backend.teardown()
         wrapper.close()
         ns3_proc.terminate()
@@ -324,14 +425,17 @@ def main():
             print(f'\n{"="*50}')
             print(f'  FINAL SUMMARY  ({step} steps)')
             print(f'{"="*50}')
-            print(f'  Avg RTT      : {np.mean(rtt_hist) if rtt_hist else 0:.2f} ms')
-            print(f'  Avg Tput     : {np.mean(tput_hist) if tput_hist else 0:.4f} Mbps')
-            print(f'  Avg Reward   : {np.mean(reward_hist):.4f}')
-            print(f'  Avg PktLoss  : {np.mean(loss_hist):.2f}')
-            print(f'  Total steps  : {step}')
-            print(f'  Backend      : {"connected" if backend.available else "offline"}')
+            print(f'  SAC Flow:')
+            print(f'    Avg RTT      : {np.mean(rtt_hist) if rtt_hist else 0:.2f} ms')
+            print(f'    Avg Tput     : {np.mean(tput_hist) if tput_hist else 0:.4f} Mbps')
+            print(f'    Avg Reward   : {np.mean(reward_hist):.4f}')
+            print(f'    Avg PktLoss  : {np.mean(loss_hist):.2f}')
+            print(f'  Total steps    : {step}')
+            print(f'  Backend        : {"connected" if backend.available else "offline"}')
             if backend.experiment_id:
-                print(f'  Experiment   : {backend.experiment_id}')
+                print(f'  Experiment     : {backend.experiment_id}')
+                print(f'  SAC Flow ID    : {backend.sac_flow_id}')
+                print(f'  CUBIC Flow ID  : {backend.cubic_flow_id}')
             print(f'{"="*50}')
         sys.exit(0)
 
@@ -358,9 +462,12 @@ def main():
             reward = compute_reward(env)
             step += 1
 
-            # Post metrics to backend (fire-and-forget)
+            # Post SAC metrics to backend
             if step % args.post_every == 0:
-                backend.post_metric(env, reward, float(action[0]))
+                backend.post_metric(
+                    backend.sac_flow_id, "SAC",
+                    env, reward, float(action[0])
+                )
 
             if step % args.log_every == 0:
                 print_dashboard(step, env, action, reward, backend)

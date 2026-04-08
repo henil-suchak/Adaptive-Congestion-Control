@@ -6,12 +6,13 @@ import java.time.LocalDateTime;
 
 /**
  * Plain DTO for WebSocket broadcast.
- * Avoids LazyInitializationException from serializing the JPA entity
- * (which has @JsonBackReference + FetchType.LAZY on the flow field).
+ * Includes flowId and algorithmType so the frontend can separate SAC vs CUBIC data.
  */
 public class FlowMetricDTO {
 
     private Long metricId;
+    private Long flowId;
+    private String algorithmType;
     private LocalDateTime timestamp;
     private Double rttMs;
     private Double throughputMbps;
@@ -33,9 +34,15 @@ public class FlowMetricDTO {
         this.sendingRateMbps = entity.getSendingRateMbps();
         this.reward = entity.getReward();
         this.action = entity.getAction();
+        if (entity.getFlow() != null) {
+            this.flowId = entity.getFlow().getFlowId();
+            this.algorithmType = entity.getFlow().getAlgorithmType();
+        }
     }
 
     public Long getMetricId() { return metricId; }
+    public Long getFlowId() { return flowId; }
+    public String getAlgorithmType() { return algorithmType; }
     public LocalDateTime getTimestamp() { return timestamp; }
     public Double getRttMs() { return rttMs; }
     public Double getThroughputMbps() { return throughputMbps; }

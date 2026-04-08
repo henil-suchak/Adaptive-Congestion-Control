@@ -11,4 +11,8 @@ public interface FlowRepository extends JpaRepository<Flow, Long> {
     List<Flow> findByExperiment_ExperimentId(Long experimentId);
 
     Optional<Flow> findByFlowId(Long flowId);
+
+    List<Flow> findByAlgorithmType(String algorithmType);
+
+    Optional<Flow> findByExperiment_ExperimentIdAndAlgorithmType(Long experimentId, String algorithmType);
 }

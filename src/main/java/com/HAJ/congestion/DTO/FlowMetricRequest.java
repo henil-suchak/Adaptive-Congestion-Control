@@ -9,6 +9,7 @@ public class FlowMetricRequest {
 
     // Flow ID — sent by BackendManager so we don't hardcode 1L
     private Long flowId;
+    private String algorithmType;
 
     private Double rttMs;
     private Double throughputMbps;
@@ -52,5 +53,9 @@ public class FlowMetricRequest {
 
     public Double getAction() {
         return action;
+    }
+
+    public String getAlgorithmType() {
+        return algorithmType;
     }
 }

@@ -51,7 +51,6 @@ public class FlowMetricController {
 
         predictionService.generateAndSavePrediction(flowMetric);
 
-        // Broadcast DTO (not entity) to avoid LazyInitializationException
         FlowMetricDTO dto = new FlowMetricDTO(flowMetric);
         messagingTemplate.convertAndSend("/topic/metrics", dto);
 

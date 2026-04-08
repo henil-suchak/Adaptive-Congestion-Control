@@ -1,7 +1,6 @@
 package com.HAJ.congestion.entity;
 
 import com.fasterxml.jackson.annotation.JsonBackReference;
-import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonManagedReference;
 import jakarta.persistence.*;
 import java.util.List;
@@ -23,6 +22,9 @@ public class Flow {
     @Column(nullable = false)
     private String protocol;
 
+    @Column(nullable = false)
+    private String algorithmType = "UNKNOWN";
+
     @JsonBackReference
     @ManyToOne
     @JoinColumn(name = "experiment_id")
@@ -40,6 +42,14 @@ public class Flow {
         this.sender = sender;
         this.receiver = receiver;
         this.protocol = protocol;
+        this.experiment = experiment;
+    }
+
+    public Flow(String sender, String receiver, String protocol, String algorithmType, Experiment experiment) {
+        this.sender = sender;
+        this.receiver = receiver;
+        this.protocol = protocol;
+        this.algorithmType = algorithmType;
         this.experiment = experiment;
     }
 
@@ -87,5 +97,13 @@ public class Flow {
 
     public void setProtocol(String tcp) {
         this.protocol = tcp;
+    }
+
+    public String getAlgorithmType() {
+        return algorithmType;
+    }
+
+    public void setAlgorithmType(String algorithmType) {
+        this.algorithmType = algorithmType;
     }
 }
