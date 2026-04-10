@@ -1,14 +1,29 @@
 package com.HAJ.congestion.DTO;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 import java.time.LocalDateTime;
 
 public class FlowMetricRequest {
+
+    // OPTIONAL — backend will auto-fill
     private LocalDateTime timestamp;
+
+    // Flow ID — sent by BackendManager so we don't hardcode 1L
+    private Long flowId;
+    private String algorithmType;
+
     private Double rttMs;
     private Double throughputMbps;
     private Double packetLossRate;
-    private Double cwndBytes;
+    @JsonProperty("cwndBytes")
+    private Double cwnd;
     private Double sendingRateMbps;
+   private Double reward = 0.0;
+private Double action = 1.0;
+    public Long getFlowId() {
+        return flowId;
+    }
 
     public LocalDateTime getTimestamp() {
         return timestamp;
@@ -26,11 +41,23 @@ public class FlowMetricRequest {
         return packetLossRate;
     }
 
-    public Double getCwndBytes() {
-        return cwndBytes;
+    public Double getCwnd() {
+        return cwnd;
     }
 
     public Double getSendingRateMbps() {
         return sendingRateMbps;
+    }
+
+    public Double getReward() {
+        return reward;
+    }
+
+    public Double getAction() {
+        return action;
+    }
+
+    public String getAlgorithmType() {
+        return algorithmType;
     }
 }

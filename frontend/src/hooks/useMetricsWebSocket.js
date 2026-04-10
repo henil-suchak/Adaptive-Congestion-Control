@@ -35,7 +35,7 @@ export function useMetricsWebSocket() {
             time,
             rtt: metric.rttMs || 0,
             throughput: metric.throughputMbps || 0,
-            cwnd: (metric.cwndBytes || 0) / 1000,
+            cwnd: (metric.cwndBytes ),
             reward: metric.reward || 0,
             action: metric.action || 0,
             loss: metric.packetLossRate || 0,

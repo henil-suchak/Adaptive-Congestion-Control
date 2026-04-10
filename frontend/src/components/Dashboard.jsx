@@ -4,6 +4,11 @@ import {
   Tooltip, ResponsiveContainer, ReferenceLine, Area, AreaChart,
 } from 'recharts';
 import { useMetricsWebSocket } from '../hooks/useMetricsWebSocket';
+import ControlPanel from './ControlPanel';
+import SummaryModal from './SummaryModal';
+import InsightDrawer from './InsightDrawer';
+import TimelineDrawer from './TimelineDrawer';
+import ScoreModal from './ScoreModal';
 
 const COLORS = {
   sac:   { primary: '#818cf8', light: '#a5b4fc', bg: 'rgba(129,140,248,0.15)' },
@@ -324,7 +329,7 @@ function ComparisonPanel({ sacMetrics, cubicMetrics }) {
 
   return (
     <div className="bg-gray-900/80 backdrop-blur-sm rounded-xl p-4 border border-gray-800 space-y-3">
-      <h3 className="text-xs font-semibold uppercase tracking-wider text-amber-400">
+      <h3 className="text-xs font-semibold uppercase tracking-wider text-amber-400" title="Real-time weighted comparison of SAC and CUBIC using throughput (45%), RTT (35%), and loss (20%)">
         Live Comparison
       </h3>
 
@@ -380,6 +385,35 @@ function ComparisonPanel({ sacMetrics, cubicMetrics }) {
           />
         </div>
       </div>
+
+      {/* Inline: Link Utilization */}
+      <div className="pt-2 border-t border-gray-800">
+        <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-1.5" title="Percentage of 2 Mbps link capacity used on average">
+          Link Utilization
+        </p>
+        <div className="grid grid-cols-2 gap-2">
+          <div className="bg-gray-950/40 rounded-lg p-1.5 text-center">
+            <span className="text-indigo-300 text-xs font-mono">{(c.sacAvgTput / 2.0 * 100).toFixed(1)}%</span>
+            <p className="text-[9px] text-gray-600">SAC</p>
+          </div>
+          <div className="bg-gray-950/40 rounded-lg p-1.5 text-center">
+            <span className="text-orange-300 text-xs font-mono">{(c.cubicAvgTput / 2.0 * 100).toFixed(1)}%</span>
+            <p className="text-[9px] text-gray-600">CUBIC</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Inline: Performance Badges */}
+      <div className="pt-2 border-t border-gray-800 flex flex-wrap gap-1.5">
+        {c.sacAvgTput > 1.5 && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30" title="SAC avg throughput > 1.5 Mbps">SAC High Tput</span>}
+        {c.sacAvgTput < 0.5 && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-red-500/15 text-red-400 border border-red-500/30" title="SAC avg throughput < 0.5 Mbps">SAC Low Tput</span>}
+        {c.cubicAvgTput > 1.5 && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30" title="CUBIC avg throughput > 1.5 Mbps">CUBIC High Tput</span>}
+        {c.cubicAvgTput < 0.5 && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-red-500/15 text-red-400 border border-red-500/30" title="CUBIC avg throughput < 0.5 Mbps">CUBIC Low Tput</span>}
+        {c.sacAvgLoss < 0.02 && c.sacAvgRtt < 120 && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-blue-500/15 text-blue-400 border border-blue-500/30" title="Low loss + low RTT">SAC Stable</span>}
+        {c.cubicAvgLoss < 0.02 && c.cubicAvgRtt < 120 && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-blue-500/15 text-blue-400 border border-blue-500/30" title="Low loss + low RTT">CUBIC Stable</span>}
+        {(c.sacAvgTput >= 0.5 && c.sacAvgTput <= 1.5) && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-gray-500/15 text-gray-400 border border-gray-500/30">SAC Mid Tput</span>}
+        {(c.cubicAvgTput >= 0.5 && c.cubicAvgTput <= 1.5) && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-gray-500/15 text-gray-400 border border-gray-500/30">CUBIC Mid Tput</span>}
+      </div>
     </div>
   );
 }
@@ -421,6 +455,10 @@ export default function Dashboard() {
   } = useMetricsWebSocket();
 
   const [view, setView] = useState('BOTH');
+  const [showSummary, setShowSummary] = useState(false);
+  const [showInsights, setShowInsights] = useState(false);
+  const [showTimeline, setShowTimeline] = useState(false);
+  const [showScore, setShowScore] = useState(false);
 
   // Choose data source based on view
   const chartData = view === 'BOTH'
@@ -462,6 +500,14 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* Control Panel */}
+      <ControlPanel
+        onSummary={() => setShowSummary(true)}
+        onInsights={() => setShowInsights(true)}
+        onTimeline={() => setShowTimeline(true)}
+        onScore={() => setShowScore(true)}
+      />
 
       {/* Main grid: 3 cols charts + 1 col panels */}
       <div className="grid grid-cols-4 gap-4">
@@ -523,6 +569,12 @@ export default function Dashboard() {
           />
         </div>
       </div>
+
+      {/* Overlays — rendered outside grid, only visible on user action */}
+      <SummaryModal open={showSummary} onClose={() => setShowSummary(false)} sacMetrics={sacMetrics} cubicMetrics={cubicMetrics} />
+      <InsightDrawer open={showInsights} onClose={() => setShowInsights(false)} sacMetrics={sacMetrics} cubicMetrics={cubicMetrics} />
+      <TimelineDrawer open={showTimeline} onClose={() => setShowTimeline(false)} sacMetrics={sacMetrics} cubicMetrics={cubicMetrics} />
+      <ScoreModal open={showScore} onClose={() => setShowScore(false)} sacMetrics={sacMetrics} cubicMetrics={cubicMetrics} />
     </div>
   );
 }

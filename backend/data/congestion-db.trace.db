@@ -909,3 +909,9 @@ Caused by: java.io.IOException: There is not enough space on the disk
 	at java.base/sun.nio.ch.FileChannelImpl.write(FileChannelImpl.java:1250)
 	at org.h2.mvstore.DataUtils.writeFully(DataUtils.java:474)
 	... 11 more
+2026-04-09 20:50:04.235442+05:30 jdbc[13]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "FLOW" not found; SQL statement:
+SELECT * FROM FLOW [42102-224]
+2026-04-09 20:52:25.560649+05:30 jdbc[13]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "FLOW_METRIC" not found; SQL statement:
+SELECT * FROM flow_metric ORDER BY timestamp DESC [42102-224]

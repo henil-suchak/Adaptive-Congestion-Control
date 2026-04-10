@@ -22,7 +22,7 @@ public class Flow {
     @Column(nullable = false)
     private String protocol;
 
-    @Column(nullable = false)
+    @Column(nullable = true)
     private String algorithmType = "UNKNOWN";
 
     @JsonBackReference
@@ -33,7 +33,6 @@ public class Flow {
     @JsonManagedReference
     @OneToMany(mappedBy = "flow", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<FlowMetric> metrics;
-
     /* ---------- Constructors ---------- */
 
     public Flow() {}

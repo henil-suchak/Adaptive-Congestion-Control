@@ -16,12 +16,18 @@ import java.util.List;
 
 @Service
 public class FlowMetricServiceImpl implements FlowMetricService {
+
     private final FlowRepository flowRepository;
     private final FlowMetricRepository flowMetricRepository;
     private final DummyCongestionModel dummyCongestionModel;
     private final SimpMessagingTemplate messagingTemplate;
 
-    public FlowMetricServiceImpl(FlowRepository flowRepository, FlowMetricRepository flowMetricRepository, DummyCongestionModel dummyCongestionModel, SimpMessagingTemplate messagingTemplate) {
+    public FlowMetricServiceImpl(
+            FlowRepository flowRepository,
+            FlowMetricRepository flowMetricRepository,
+            DummyCongestionModel dummyCongestionModel,
+            SimpMessagingTemplate messagingTemplate
+    ) {
         this.flowRepository = flowRepository;
         this.flowMetricRepository = flowMetricRepository;
         this.dummyCongestionModel = dummyCongestionModel;
@@ -29,21 +35,55 @@ public class FlowMetricServiceImpl implements FlowMetricService {
     }
 
     @Override
-    public FlowMetric recordFlowMetric(Long flowId, LocalDateTime timestamp, Double rttMs, Double throughputMbps, Double packetLossRate, Double cwnd, Double sendingRateMbps) {
-        var flow = flowRepository.findById(flowId).orElseThrow(() -> new IllegalArgumentException("Flow not Found: " + flowId));
+    public FlowMetric recordFlowMetric(
+            Long flowId,
+            LocalDateTime timestamp,
+            Double rttMs,
+            Double throughputMbps,
+            Double packetLossRate,
+            Double cwnd,
+            Double sendingRateMbps,
+            Double reward,
+            Double action
+    ) {
+
+        // ✅ Fetch flow (already loaded, avoids LAZY issue)
+        var flow = flowRepository.findById(flowId)
+                .orElseThrow(() -> new IllegalArgumentException("Flow not Found: " + flowId));
+
         Experiment experiment = flow.getExperiment();
+
         if (experiment.getStatus() != ExperimentStatus.RUNNING) {
             throw new IllegalArgumentException("Experiment is not in running state");
         }
-        FlowMetric flowMetric = new FlowMetric(timestamp, rttMs, throughputMbps, packetLossRate, cwnd, sendingRateMbps, flow);
+
+        // ✅ Save metric
+        FlowMetric flowMetric = new FlowMetric(
+                timestamp,
+                rttMs,
+                throughputMbps,
+                packetLossRate,
+                cwnd,
+                sendingRateMbps,
+                reward,
+                action,
+                flow
+        );
+
         FlowMetric saved = flowMetricRepository.save(flowMetric);
 
-        // Broadcast to WebSocket dashboard
+        // ✅ WebSocket broadcast with FIX
         try {
             FlowMetricDTO dto = new FlowMetricDTO(saved);
+
+            // 🔥 FIX: manually set because saved.getFlow() may be null (LAZY)
+            dto.setFlowId(flow.getFlowId());
+            dto.setAlgorithmType(flow.getAlgorithmType());
+
             messagingTemplate.convertAndSend("/topic/metrics", dto);
+
         } catch (Exception e) {
-            // ignore broadcast errors
+            System.out.println("[WS ERROR] Failed to send metric: " + e.getMessage());
         }
 
         return saved;
