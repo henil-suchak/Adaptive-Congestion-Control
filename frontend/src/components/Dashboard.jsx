@@ -578,3 +578,15 @@ export default function Dashboard() {
     </div>
   );
 }
+
+/* ── Additive named exports (reused by SAC/CUBIC learning pages) ──────── */
+/* These expose the existing chart building blocks without altering the   */
+/* Dashboard's default rendering or logic.                                */
+export {
+  ComparisonChart,
+  AlgoStatsPanel,
+  AgentPanel,
+  ComparisonPanel,
+  MiniStat,
+  COLORS,
+};
