@@ -1,0 +1,65 @@
+# Partner-facing compose file.
+# No source code needed — just this file + Docker Desktop.
+#
+# Setup (one-time):
+#   docker login                       # use your Docker Hub account that has been granted access
+#
+# Run:
+#   docker compose -f docker-compose.partner.yml up -d
+#
+# Open:
+#   Frontend  -> http://localhost:3000
+#   Backend   -> http://localhost:8080/api/metrics/latest
+#
+# Stop:
+#   docker compose -f docker-compose.partner.yml down
+
+services:
+  backend:
+    image: archii1201/acc-backend:v1
+    pull_policy: always
+    ports:
+      - "8080:8080"
+    volumes:
+      - backend-data:/app/data
+    networks:
+      - cc-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/metrics/latest"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    image: archii1201/acc-frontend:v1
+    pull_policy: always
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_BACKEND_URL=http://localhost:8080
+    depends_on:
+      - backend
+    networks:
+      - cc-network
+
+  # ns-3 simulation (~16 GB image, slow first pull).
+  # Start it explicitly when needed:
+  #   docker compose -f docker-compose.partner.yml --profile sim up -d ns3-sim
+  #   docker compose -f docker-compose.partner.yml exec ns3-sim bash
+  ns3-sim:
+    image: archii1201/acc-ns3-sim:v1
+    pull_policy: always
+    profiles: ["sim"]
+    stdin_open: true
+    tty: true
+    depends_on:
+      - backend
+    networks:
+      - cc-network
+
+networks:
+  cc-network:
+    driver: bridge
+
+volumes:
+  backend-data:

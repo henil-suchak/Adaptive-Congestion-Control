@@ -1,0 +1,24 @@
+# Source-only image. Not meant to be run.
+# Used to ship the source code via Docker Hub instead of GitHub.
+#
+# Build:
+#   docker build -t archii1201/acc-source:v1 -f Dockerfile.source .
+#
+# Push:
+#   docker push archii1201/acc-source:v1
+#
+# Partner extracts on their machine:
+#   docker pull archii1201/acc-source:v1
+#   docker create --name acc-tmp archii1201/acc-source:v1
+#   docker cp acc-tmp:/src ./Adaptive-Congestion-Control
+#   docker rm acc-tmp
+#
+# Note: respects .dockerignore, so build artifacts (target/, node_modules/,
+# *.log, *.pkl, *.exe, IDE folders) are NOT included.
+
+FROM alpine:3.19
+LABEL org.opencontainers.image.title="Adaptive Congestion Control - Source"
+LABEL org.opencontainers.image.description="Source code bundle. Extract with: docker create --name tmp <img> && docker cp tmp:/src ./out"
+WORKDIR /src
+COPY . /src
+CMD ["sh", "-c", "echo 'This image only ships source code. Run: docker cp <container>:/src ./out'"]
