@@ -4,7 +4,6 @@ import com.HAJ.congestion.DTO.FlowMetricDTO;
 import com.HAJ.congestion.DTO.FlowMetricRequest;
 import com.HAJ.congestion.entity.FlowMetric;
 import com.HAJ.congestion.service.FlowMetricService;
-import com.HAJ.congestion.service.PredictionService;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.web.bind.annotation.*;
 
@@ -16,14 +15,11 @@ import java.util.List;
 public class FlowMetricController {
 
     private final FlowMetricService flowMetricService;
-    private final PredictionService predictionService;
     private final SimpMessagingTemplate messagingTemplate;
 
     public FlowMetricController(FlowMetricService flowMetricService,
-                                PredictionService predictionService,
                                 SimpMessagingTemplate messagingTemplate) {
         this.flowMetricService = flowMetricService;
-        this.predictionService = predictionService;
         this.messagingTemplate = messagingTemplate;
     }
 
@@ -48,11 +44,6 @@ public class FlowMetricController {
                 request.getReward(),
                 request.getAction()
         );
-
-        predictionService.generateAndSavePrediction(flowMetric);
-
-        FlowMetricDTO dto = new FlowMetricDTO(flowMetric);
-        messagingTemplate.convertAndSend("/topic/metrics", dto);
 
         return flowMetric;
     }

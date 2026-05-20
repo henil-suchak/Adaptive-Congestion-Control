@@ -16,7 +16,6 @@ public class FlowMetricRequest {
     private Double rttMs;
     private Double throughputMbps;
     private Double packetLossRate;
-    @JsonProperty("cwndBytes")
     private Double cwnd;
     private Double sendingRateMbps;
    private Double reward = 0.0;

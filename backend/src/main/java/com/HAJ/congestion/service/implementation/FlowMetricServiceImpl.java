@@ -1,7 +1,6 @@
 package com.HAJ.congestion.service.implementation;
 
 import com.HAJ.congestion.DTO.FlowMetricDTO;
-import com.HAJ.congestion.ML.DummyCongestionModel;
 import com.HAJ.congestion.entity.Experiment;
 import com.HAJ.congestion.entity.ExperimentStatus;
 import com.HAJ.congestion.entity.FlowMetric;
@@ -19,18 +18,14 @@ public class FlowMetricServiceImpl implements FlowMetricService {
 
     private final FlowRepository flowRepository;
     private final FlowMetricRepository flowMetricRepository;
-    private final DummyCongestionModel dummyCongestionModel;
     private final SimpMessagingTemplate messagingTemplate;
 
     public FlowMetricServiceImpl(
             FlowRepository flowRepository,
             FlowMetricRepository flowMetricRepository,
-            DummyCongestionModel dummyCongestionModel,
-            SimpMessagingTemplate messagingTemplate
-    ) {
+            SimpMessagingTemplate messagingTemplate) {
         this.flowRepository = flowRepository;
         this.flowMetricRepository = flowMetricRepository;
-        this.dummyCongestionModel = dummyCongestionModel;
         this.messagingTemplate = messagingTemplate;
     }
 
@@ -44,8 +39,7 @@ public class FlowMetricServiceImpl implements FlowMetricService {
             Double cwnd,
             Double sendingRateMbps,
             Double reward,
-            Double action
-    ) {
+            Double action) {
 
         // ✅ Fetch flow (already loaded, avoids LAZY issue)
         var flow = flowRepository.findById(flowId)
@@ -67,8 +61,7 @@ public class FlowMetricServiceImpl implements FlowMetricService {
                 sendingRateMbps,
                 reward,
                 action,
-                flow
-        );
+                flow);
 
         FlowMetric saved = flowMetricRepository.save(flowMetric);
 

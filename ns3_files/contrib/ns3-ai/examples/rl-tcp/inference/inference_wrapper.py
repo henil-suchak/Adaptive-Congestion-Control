@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 import ctypes, sys, os, time
 
-NS3_ROOT = '/Users/suchak/CongestionControl/ns-allinone-3.35/ns-3.35'
+# Auto-detect ns3 root: Docker container or local
+NS3_ROOT = os.environ.get('NS3_ROOT', '/sim/ns-allinone-3.35/ns-3.35')
 sys.path.insert(0, os.path.join(NS3_ROOT, 'contrib/ns3-ai/py_interface'))
 from py_interface import Ns3AIRL, AcquireMemoryCond, ReleaseMemory
 
@@ -47,7 +48,7 @@ class InferenceWrapper:
         self.var    = Ns3AIRL(shm_id, sTcpRlInferenceEnv, TcpRlInferenceAct)
         self._obj   = self.var.m_obj
         print(f"[InferenceWrapper] registered shm_id={shm_id}  "
-              f"StorageType={self.var.m_size}B  (expect 67B)", flush=True)
+              f"env={_env_size}B  act={_act_size}B  ready", flush=True)
 
     def step(self, new_ssThresh, new_cWnd):
         # Spin until it is Python's turn (version % 2 == 1)
