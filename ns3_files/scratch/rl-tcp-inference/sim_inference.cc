@@ -25,15 +25,13 @@ static std::vector<uint32_t> rxPkts;
 static void CountRxPkts (uint32_t sinkId, Ptr<const Packet>, const Address &)
 { rxPkts[sinkId]++; }
 
-// ── CUBIC flow metric tracing ────────────────────────────────────────────────
-
 static std::ofstream g_cubicTrace;
-static uint32_t  g_cubicCwnd        = 0;
-static double    g_cubicRttUs       = 0.0;
-static uint32_t  g_cubicLossCount   = 0;
-static uint64_t  g_cubicRxBytes     = 0;
-static uint64_t  g_cubicRxBytesPrev = 0;
-static uint32_t  g_cubicSegSize     = 340;
+static uint32_t  g_cubicCwnd          = 0;
+static double    g_cubicRttUs         = 0.0;
+static uint32_t  g_cubicLossCount     = 0;
+static uint64_t  g_cubicRxBytes       = 0;
+static uint64_t  g_cubicRxBytesPrev   = 0;
+static uint32_t  g_cubicSegSize       = 340;
 static uint32_t  g_cubicBytesInFlight = 0;
 
 static void CubicCwndChanged (uint32_t, uint32_t newVal)
@@ -78,8 +76,6 @@ static void WriteCubicMetrics ()
 
 static void ConnectCubicTraces ()
 {
-  // Node ordering: routers(0,1), leftNodes(2=SAC,3=CUBIC), rightNodes(4,5)
-  // CUBIC sender is node 3, socket index 0
   Config::ConnectWithoutContext (
       "/NodeList/3/$ns3::TcpL4Protocol/SocketList/0/CongestionWindow",
       MakeCallback (&CubicCwndChanged));
@@ -99,10 +95,14 @@ static void ConnectCubicTraces ()
   Simulator::Schedule (MilliSeconds (100), &WriteCubicMetrics);
 }
 
-// ── Main ─────────────────────────────────────────────────────────────────────
-
 int main (int argc, char *argv[])
 {
+  // ── CRITICAL: bind shared memory key FIRST before anything else ───────────
+  // Python uses Init(2333, 4096) which creates shmkey=2333 (0x0000091d).
+  // ns3-ai C++ defaults to shmkey=1234 (0x000004d2).
+  // Without this line they attach to different segments and never communicate.
+  GlobalValue::Bind ("SharedMemoryKey", UintegerValue (2333));
+
   uint32_t    simDuration      = 200;
   std::string bottleneck_bw    = "2Mbps";
   std::string bottleneck_delay = "20ms";
@@ -112,31 +112,20 @@ int main (int argc, char *argv[])
   std::string cubicTraceFile   = "/tmp/cubic_metrics.csv";
 
   CommandLine cmd;
-  cmd.AddValue ("duration",     "Simulation duration (s)",   simDuration);
-  cmd.AddValue ("cubicTrace",   "CUBIC metrics output file", cubicTraceFile);
+  cmd.AddValue ("duration",   "Simulation duration (s)",   simDuration);
+  cmd.AddValue ("cubicTrace", "CUBIC metrics output file", cubicTraceFile);
   cmd.Parse (argc, argv);
 
-  // TCP defaults (shared by both flows)
-  Config::SetDefault ("ns3::TcpSocket::SegmentSize",  UintegerValue (mtu_bytes - 60));
-  Config::SetDefault ("ns3::TcpSocket::DelAckCount",  UintegerValue (1));
-  Config::SetDefault ("ns3::TcpSocket::RcvBufSize",   UintegerValue (1 << 21));
-  Config::SetDefault ("ns3::TcpSocket::SndBufSize",   UintegerValue (1 << 21));
+  Config::SetDefault ("ns3::TcpSocket::SegmentSize", UintegerValue (mtu_bytes - 60));
+  Config::SetDefault ("ns3::TcpSocket::DelAckCount", UintegerValue (1));
+  Config::SetDefault ("ns3::TcpSocket::RcvBufSize",  UintegerValue (1 << 21));
+  Config::SetDefault ("ns3::TcpSocket::SndBufSize",  UintegerValue (1 << 21));
   g_cubicSegSize = mtu_bytes - 60;
 
-  // ── Topology ───────────────────────────────────────────────────────────────
-  //
-  //  leftNode[0] (SAC)  ─┐                              ┌─ rightNode[0]
-  //                       ├── R0 ══[bottleneck]══ R1 ──┤
-  //  leftNode[1] (CUBIC)─┘                              └─ rightNode[1]
-  //
-  //  All access links: 10 Mbps / 20 ms
-  //  Bottleneck:         2 Mbps / 20 ms   FqCoDel 100p
-  //
-
   NodeContainer routers, leftNodes, rightNodes;
-  routers.Create (2);       // node 0, 1
-  leftNodes.Create (2);     // node 2 = SAC sender, node 3 = CUBIC sender
-  rightNodes.Create (2);    // node 4 = SAC receiver, node 5 = CUBIC receiver
+  routers.Create (2);
+  leftNodes.Create (2);
+  rightNodes.Create (2);
   rxPkts.assign (2, 0);
 
   PointToPointHelper bottleneckLink, accessLink;
@@ -146,44 +135,35 @@ int main (int argc, char *argv[])
   accessLink.SetDeviceAttribute  ("DataRate", StringValue (access_bw));
   accessLink.SetChannelAttribute ("Delay",    StringValue (access_delay));
 
-  // Bottleneck link (shared)
-  NetDeviceContainer r0r1 = bottleneckLink.Install (routers.Get (0), routers.Get (1));
-
-  // Access links — SAC flow
+  NetDeviceContainer r0r1  = bottleneckLink.Install (routers.Get (0), routers.Get (1));
   NetDeviceContainer l0r0  = accessLink.Install (leftNodes.Get (0),  routers.Get (0));
   NetDeviceContainer r1rn0 = accessLink.Install (routers.Get (1),    rightNodes.Get (0));
-
-  // Access links — CUBIC flow
   NetDeviceContainer l1r0  = accessLink.Install (leftNodes.Get (1),  routers.Get (0));
   NetDeviceContainer r1rn1 = accessLink.Install (routers.Get (1),    rightNodes.Get (1));
 
-  // ── Internet stack ─────────────────────────────────────────────────────────
   InternetStackHelper internet;
   internet.InstallAll ();
 
-  // Per-node congestion control: SAC for sender 0, CUBIC for sender 1
   leftNodes.Get (0)->GetObject<TcpL4Protocol> ()->SetAttribute (
       "SocketType", TypeIdValue (TcpRlInference::GetTypeId ()));
   leftNodes.Get (1)->GetObject<TcpL4Protocol> ()->SetAttribute (
       "SocketType", TypeIdValue (TypeId::LookupByName ("ns3::TcpCubic")));
 
-  // ── IP addressing ──────────────────────────────────────────────────────────
   Ipv4AddressHelper ipv4;
-  ipv4.SetBase ("10.1.1.0", "255.255.255.0");  ipv4.Assign (l0r0);
-  ipv4.SetBase ("10.1.2.0", "255.255.255.0");  ipv4.Assign (r0r1);
-  ipv4.SetBase ("10.1.3.0", "255.255.255.0");  ipv4.Assign (r1rn0);
-  ipv4.SetBase ("10.1.4.0", "255.255.255.0");  ipv4.Assign (l1r0);
-  ipv4.SetBase ("10.1.5.0", "255.255.255.0");  ipv4.Assign (r1rn1);
+  ipv4.SetBase ("10.1.1.0", "255.255.255.0"); ipv4.Assign (l0r0);
+  ipv4.SetBase ("10.1.2.0", "255.255.255.0"); ipv4.Assign (r0r1);
+  ipv4.SetBase ("10.1.3.0", "255.255.255.0"); ipv4.Assign (r1rn0);
+  ipv4.SetBase ("10.1.4.0", "255.255.255.0"); ipv4.Assign (l1r0);
+  ipv4.SetBase ("10.1.5.0", "255.255.255.0"); ipv4.Assign (r1rn1);
   Ipv4GlobalRoutingHelper::PopulateRoutingTables ();
 
-  // ── Queue discipline on bottleneck ─────────────────────────────────────────
   TrafficControlHelper tchClean;
   tchClean.Uninstall (r0r1);
   TrafficControlHelper tch;
-  tch.SetRootQueueDisc ("ns3::FqCoDelQueueDisc", "MaxSize", StringValue ("100p"));
+  tch.SetRootQueueDisc ("ns3::FqCoDelQueueDisc",
+                        "MaxSize", StringValue ("100p"));
   tch.Install (r0r1);
 
-  // ── Flow 1: SAC (RL-based CC) — port 9 ────────────────────────────────────
   uint16_t sacPort = 9;
   PacketSinkHelper sacSinkHelper ("ns3::TcpSocketFactory",
       InetSocketAddress (Ipv4Address::GetAny (), sacPort));
@@ -202,7 +182,6 @@ int main (int argc, char *argv[])
   sacSourceApp.Start (Seconds (0.1));
   sacSourceApp.Stop  (Seconds (simDuration));
 
-  // ── Flow 2: CUBIC — port 10 ───────────────────────────────────────────────
   uint16_t cubicPort = 10;
   PacketSinkHelper cubicSinkHelper ("ns3::TcpSocketFactory",
       InetSocketAddress (Ipv4Address::GetAny (), cubicPort));
@@ -221,8 +200,6 @@ int main (int argc, char *argv[])
   cubicSourceApp.Start (Seconds (0.1));
   cubicSourceApp.Stop  (Seconds (simDuration));
 
-  // ── CUBIC metric tracing ───────────────────────────────────────────────────
-  // PacketSink Rx callback for throughput measurement
   cubicSinkApp.Get (0)->TraceConnectWithoutContext (
       "Rx", MakeCallback (&CubicRxPkt));
 
@@ -230,10 +207,8 @@ int main (int argc, char *argv[])
   g_cubicTrace << "time_s,cwnd,rtt_us,throughput_bps,loss,seg_size,bytes_in_flight\n";
   g_cubicTrace.flush ();
 
-  // Connect CUBIC socket traces after the socket is created (app starts at 0.1s)
   Simulator::Schedule (Seconds (0.5), &ConnectCubicTraces);
 
-  // ── Run ────────────────────────────────────────────────────────────────────
   Simulator::Stop (Seconds (simDuration));
   Simulator::Run ();
 

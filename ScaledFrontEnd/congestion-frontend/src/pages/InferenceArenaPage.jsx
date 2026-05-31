@@ -8,9 +8,10 @@ export default function InferenceArenaPage() {
   // 1. React State
   const [metricsData, setMetricsData] = useState([]);
   const [isConnected, setIsConnected] = useState(false);
-  const [selectedModel, setSelectedModel] = useState('sac_baseline_v1'); 
+  const [selectedModel, setSelectedModel] = useState('sac_tcp_1500000_steps.zip'); 
   const [targetExperimentId, setTargetExperimentId] = useState(''); 
   const [availableExperiments, setAvailableExperiments] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
 
   // 2. Fetch all experiments when the page loads
   useEffect(() => {
@@ -37,26 +38,30 @@ export default function InferenceArenaPage() {
 
   // 3. Trigger the backend engine
   const handleStartSimulation = async () => {
-    if (!targetExperimentId) {
-      console.warn("No experiment selected!");
-      return;
-    }
+    if (!targetExperimentId || isLoading) return;
+    setIsLoading(true);
     try {
       console.log(`Sending ignition command for Experiment ${targetExperimentId} using model: ${selectedModel}`);
+      setMetricsData([]);
       await ExperimentService.startExperiment(targetExperimentId, selectedModel); 
     } catch (error) {
       console.error("Failed to start engine:", error);
+    } finally {
+      setIsLoading(false);
     }
   };
 
   // 4. Trigger the kill switch
   const handleStopSimulation = async () => {
-    if (!targetExperimentId) return;
+    if (!targetExperimentId || isLoading) return;
+    setIsLoading(true);
     try {
       console.log(`Sending kill signal for Experiment ${targetExperimentId}...`);
       await ExperimentService.endExperiment(targetExperimentId); 
     } catch (error) {
       console.error("Failed to stop engine:", error);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -158,27 +163,31 @@ export default function InferenceArenaPage() {
             onChange={(e) => setSelectedModel(e.target.value)}
             className="bg-slate-800 text-white border border-slate-700 rounded-md py-2 px-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
+          <optgroup label="My Trained Models">
+              {/* 🟢 ADD YOUR EXACT FILE HERE */}
+              <option value="sac_tcp_1500000_steps.zip">My 1.5M Step SAC Model</option>
+            </optgroup>
             <optgroup label="Platform Defaults">
               <option value="sac_baseline_v1">SAC Baseline (Balanced)</option>
               <option value="sac_high_throughput">SAC (High Throughput)</option>
             </optgroup>
-            <optgroup label="My Trained Models">
-              <option value="user_model_42">Custom Run (Topology ID: 42)</option>
-            </optgroup>
+            
           </select>
 
           {/* START BUTTON */}
           <button 
             onClick={handleStartSimulation}
-            className="bg-blue-600 hover:bg-blue-500 text-white font-bold py-2 px-6 rounded-lg transition shadow-lg border border-blue-400">
-            ▶ Start
+            disabled={isLoading}
+            className={`${isLoading ? 'bg-blue-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-500'} text-white font-bold py-2 px-6 rounded-lg transition shadow-lg border border-blue-400`}>
+            {isLoading ? '⏳ Wait...' : '▶ Start'}
           </button>
 
           {/* STOP BUTTON */}
           <button 
             onClick={handleStopSimulation}
-            className="bg-red-600 hover:bg-red-500 text-white font-bold py-2 px-6 rounded-lg transition shadow-lg border border-red-400">
-            ⏹ Stop
+            disabled={isLoading}
+            className={`${isLoading ? 'bg-red-400 cursor-not-allowed' : 'bg-red-600 hover:bg-red-500'} text-white font-bold py-2 px-6 rounded-lg transition shadow-lg border border-red-400`}>
+            {isLoading ? '⏳ Wait...' : '⏹ Stop'}
           </button>
         </div>
       </div>

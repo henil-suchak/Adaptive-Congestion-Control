@@ -1,8 +1,7 @@
 def build(bld):
-    obj = bld.create_ns3_program(
-        'rl-tcp-inference',
-        ['sim_inference.cc',
-         'tcp-rl-env-inference.cc',
-         'tcp-rl-inference.cc']
-    )
-    obj.source += ['../rl-tcp/tcp-rl.cc', '../rl-tcp/tcp-rl-env.cc']
+    obj = bld.create_ns3_program('rl-tcp-inference', ['core', 'network', 'internet', 'point-to-point', 'applications'])
+    obj.source = 'rl-tcp-inference.cc tcp-rl-env-inference.cc'
+    
+    # Explicitly include the headers and the source code
+    obj.includes = ['/sim/ns-allinone-3.35/ns-3.35/contrib/ns3-ai/model']
+    obj.source += ' /sim/ns-allinone-3.35/ns-3.35/contrib/ns3-ai/model/ns3-ai-module.cc'

@@ -7,59 +7,41 @@ namespace ns3 {
 
 NS_LOG_COMPONENT_DEFINE ("TcpRlInferenceEnv");
 
-// No minimum cWnd floor — let the agent control everything directly.
-
 TcpRlInferenceEnv::TcpRlInferenceEnv (uint16_t id)
   : Ns3AIRL<sTcpRlInferenceEnv, TcpRlInferenceAct> (id)
 {
-  SetCond (2, 0);
+  SetCond (2, 0);        // C++ acquires when version%2==0
   auto env     = EnvSetterCond ();
   env->envType = 0;
-  GetCompleted ();
+  GetCompleted ();       // RollBack → nextVersion stays 0
 }
 
 void TcpRlInferenceEnv::SetNodeId (uint32_t id)     { m_nodeId     = id; }
 void TcpRlInferenceEnv::SetSocketUuid (uint32_t id) { m_socketUuid = id; }
 
-// ── Packet trace callbacks ────────────────────────────────────────────────────
-
 void TcpRlInferenceEnv::TxPktTrace (Ptr<const Packet> p,
                                      const TcpHeader &,
                                      Ptr<const TcpSocketBase>)
-{
-  m_txBytes += p->GetSize ();
-}
+{ m_txBytes += p->GetSize (); }
 
 void TcpRlInferenceEnv::RxPktTrace (Ptr<const Packet> p,
                                      const TcpHeader &,
                                      Ptr<const TcpSocketBase>)
-{
-  m_rxBytes += p->GetSize ();
-}
-
-// ── Helper: apply RL cWnd only when safe ──────────────────────────────────────
+{ m_rxBytes += p->GetSize (); }
 
 void TcpRlInferenceEnv::ApplyCwndIfSafe (Ptr<TcpSocketState> tcb)
 {
-  // Only override cWnd in CA_OPEN or CA_DISORDER.
-  // In CA_LOSS / CA_RECOVERY ns-3 asserts BytesInFlight <= 1 segment.
   if (tcb->m_congState == TcpSocketState::CA_OPEN
       || tcb->m_congState == TcpSocketState::CA_DISORDER)
     {
-      uint32_t cWnd = m_new_cWnd;
-      tcb->m_cWnd     = cWnd;
+      tcb->m_cWnd     = m_new_cWnd;
       tcb->m_ssThresh = m_new_ssThresh;
     }
 }
 
-// ── TcpCongestionOps hooks ────────────────────────────────────────────────────
-
 uint32_t TcpRlInferenceEnv::GetSsThresh (Ptr<const TcpSocketState> tcb,
                                           uint32_t bytesInFlight)
-{
-  // Return RL agent's ssThresh, but enforce the floor
-  return m_new_ssThresh;
-}
+{ return m_new_ssThresh; }
 
 void TcpRlInferenceEnv::IncreaseWindow (Ptr<TcpSocketState> tcb, uint32_t segmentsAcked)
 {
@@ -74,7 +56,6 @@ void TcpRlInferenceEnv::PktsAcked (Ptr<TcpSocketState> tcb,
   m_tcb = tcb;
   m_segmentsAcked += segmentsAcked;
 
-  // Start step loop here — PktsAcked fires in ALL states
   if (!m_started)
     {
       m_started = true;
@@ -99,12 +80,10 @@ void TcpRlInferenceEnv::CongestionStateSet (Ptr<TcpSocketState> tcb,
   if (newState == TcpSocketState::CA_LOSS)
     m_packetLossCount++;
 
-  // When recovering FROM loss → CA_OPEN, immediately push cWnd up
   if (newState == TcpSocketState::CA_OPEN
       || newState == TcpSocketState::CA_DISORDER)
     {
-      uint32_t cWnd = m_new_cWnd;
-      tcb->m_cWnd     = cWnd;
+      tcb->m_cWnd     = m_new_cWnd;
       tcb->m_ssThresh = m_new_ssThresh;
     }
 }
@@ -116,8 +95,6 @@ void TcpRlInferenceEnv::CwndEvent (Ptr<TcpSocketState> tcb,
   ApplyCwndIfSafe (tcb);
 }
 
-// ── Step loop ─────────────────────────────────────────────────────────────────
-
 void TcpRlInferenceEnv::ScheduleNextStep ()
 {
   Simulator::Schedule (m_timeStep, &TcpRlInferenceEnv::SendObsGetAction, this);
@@ -125,22 +102,22 @@ void TcpRlInferenceEnv::ScheduleNextStep ()
 
 void TcpRlInferenceEnv::SendObsGetAction ()
 {
+  NS_LOG_UNCOND ("\n[C++] 🟢 Reached SendObsGetAction! Packing memory...");
   const double EMA_ALPHA = 0.3;
 
-  // Throughput: bytes SENT this step / step duration (bytes/sec)
   double stepSec = m_timeStep.GetSeconds ();
   double rawTput = (stepSec > 0) ? (double)m_txBytes / stepSec : 0.0;
   if (rawTput > 0)
     m_smoothedTput = EMA_ALPHA * rawTput + (1.0 - EMA_ALPHA) * m_smoothedTput;
 
-  // Compute RTT from PktsAcked samples
   double rawRtt_us = 0.0;
   if (m_rttSampleNum > 0)
     rawRtt_us = m_rttSum.GetMicroSeconds () / (double)m_rttSampleNum;
   if (rawRtt_us > 0)
     m_smoothedRtt_us = EMA_ALPHA * rawRtt_us + (1.0 - EMA_ALPHA) * m_smoothedRtt_us;
 
-  // Write observation to shared memory
+  // ── Write observation ─────────────────────────────────────────────────────
+  // EnvSetterCond waits for version%2==0 (guaranteed by GetCompleted rollback)
   auto env           = EnvSetterCond ();
   env->nodeId        = m_nodeId;
   env->socketUid     = m_socketUuid;
@@ -154,20 +131,25 @@ void TcpRlInferenceEnv::SendObsGetAction ()
   env->rtt_us        = (int64_t)m_smoothedRtt_us;
   env->throughput    = m_smoothedTput;
   env->packetLoss    = m_packetLossCount;
-  SetCompleted ();
+  SetCompleted ();   // ReleaseMemory → version becomes 1 → Python wakes up
 
-  // Read action from Python
+  NS_LOG_UNCOND ("[C++] 🟡 Memory unlocked for Python! Waiting for action...");
+
+  // ── Read action ───────────────────────────────────────────────────────────
+  // ActionGetterCond waits for version%2==0
+  // After Python's ReleaseMemory: version=1→2, and 2%2==0 ✅
   auto act       = ActionGetterCond ();
   m_new_ssThresh = act->new_ssThresh;
   m_new_cWnd     = act->new_cWnd;
-  GetCompleted ();
+  GetCompleted (); // ReleaseMemoryAndRollback → nextVersion rolls back
+                   // version stays at 2, nextVersion=2, so next EnvSetterCond
+                   // sees version%2==0 ✅
 
+  NS_LOG_UNCOND ("[C++] 🔴 Python responded! Action received. Step complete.\n");
 
-  // Apply RL action immediately if in safe state
   if (m_tcb)
     ApplyCwndIfSafe (m_tcb);
 
-  // Reset per-step counters
   m_rttSampleNum    = 0;
   m_rttSum          = MicroSeconds (0);
   m_segmentsAcked   = 0;

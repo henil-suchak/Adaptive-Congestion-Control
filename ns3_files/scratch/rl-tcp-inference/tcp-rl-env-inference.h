@@ -9,6 +9,8 @@
 
 namespace ns3 {
 
+  // 🟢 ADD THIS LINE TO DISABLE PADDING
+#pragma pack(push, 1)
 struct sTcpRlInferenceEnv
 {
   uint32_t nodeId;
@@ -23,7 +25,7 @@ struct sTcpRlInferenceEnv
   int64_t  rtt_us;
   double   throughput;
   uint32_t packetLoss;
-} Packed;
+};
 
 struct TcpRlInferenceAct
 {
@@ -31,6 +33,8 @@ struct TcpRlInferenceAct
   uint32_t new_cWnd;
 };
 
+// 🟢 ADD THIS LINE TO RESTORE NORMAL PADDING FOR THE REST OF NS-3
+#pragma pack(pop)
 // Uses default SimInfoType = RLEmptyInfo (1 byte) → C++ total = 67 bytes.
 // Python must also use 1 byte (_pad = c_uint8) to match.
 class TcpRlInferenceEnv : public Ns3AIRL<sTcpRlInferenceEnv, TcpRlInferenceAct>

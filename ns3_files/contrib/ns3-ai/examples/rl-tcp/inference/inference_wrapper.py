@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-import ctypes, sys, os, time
+import ctypes, sys, os
 
 # Auto-detect ns3 root: Docker container or local
 NS3_ROOT = os.environ.get('NS3_ROOT', '/sim/ns-allinone-3.35/ns-3.35')
 sys.path.insert(0, os.path.join(NS3_ROOT, 'contrib/ns3-ai/py_interface'))
-from py_interface import Ns3AIRL, AcquireMemoryCond, ReleaseMemory
+from py_interface import Ns3AIRL
 
 class sTcpRlInferenceEnv(ctypes.Structure):
     _pack_ = 1
@@ -51,18 +51,11 @@ class InferenceWrapper:
               f"env={_env_size}B  act={_act_size}B  ready", flush=True)
 
     def step(self, new_ssThresh, new_cWnd):
-        # Spin until it is Python's turn (version % 2 == 1)
-        while True:
-            if self.var.isFinish():
-                return None
-            if self.var.GetVersion() % 2 == 1:
-                break
-            time.sleep(0.001)
-
-        AcquireMemoryCond(self.shm_id, 2, 1)
-
-        if self.var.isFinish():
-            ReleaseMemory(self.shm_id)
+        # Use Ns3AIRL.Acquire() which calls AcquireMemoryCond(id, _MOD=2, _RES=1)
+        # internally. It spin-waits until version%2==1 (C++ has written obs)
+        # and handles the isFinish() check correctly.
+        data = self.var.Acquire()
+        if data is None:
             return None
 
         obj = self._obj
@@ -82,7 +75,9 @@ class InferenceWrapper:
         }
         obj.act.new_ssThresh = int(new_ssThresh)
         obj.act.new_cWnd     = int(new_cWnd)
-        ReleaseMemory(self.shm_id)
+
+        # ReleaseMemory → version increments (1→2), signaling C++ to read the action
+        self.var.Release()
         return snapshot
 
     def is_finished(self):

@@ -39,6 +39,7 @@ public class Experiment {
             cascade = CascadeType.ALL,
             orphanRemoval = true)
     private List<Flow> flows;
+
     /* ---------- Constructors ---------- */
 
     public Experiment() {
