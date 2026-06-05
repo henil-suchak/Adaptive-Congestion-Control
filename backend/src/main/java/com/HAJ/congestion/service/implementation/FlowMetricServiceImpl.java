@@ -7,6 +7,8 @@ import com.HAJ.congestion.entity.FlowMetric;
 import com.HAJ.congestion.repository.FlowMetricRepository;
 import com.HAJ.congestion.repository.FlowRepository;
 import com.HAJ.congestion.service.FlowMetricService;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 
@@ -30,6 +32,7 @@ public class FlowMetricServiceImpl implements FlowMetricService {
     }
 
     @Override
+    @CacheEvict(value = "latestMetrics", allEntries = true)
     public FlowMetric recordFlowMetric(
             Long flowId,
             LocalDateTime timestamp,
@@ -93,6 +96,7 @@ public class FlowMetricServiceImpl implements FlowMetricService {
     }
 
     @Override
+    @Cacheable("latestMetrics")
     public List<FlowMetric> getLatestMetrics() {
         return flowMetricRepository.findTop50ByOrderByTimestampDesc();
     }

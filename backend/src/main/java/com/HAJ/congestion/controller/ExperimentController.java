@@ -4,8 +4,8 @@ import com.HAJ.congestion.entity.Experiment;
 import com.HAJ.congestion.service.ExperimentService;
 import org.springframework.web.bind.annotation.*;
 import java.util.List;
+import java.util.Map;
 
-@CrossOrigin(origins = "http://localhost:5173")
 @RestController
 @RequestMapping("/api")
 public class ExperimentController {
@@ -46,5 +46,19 @@ public class ExperimentController {
     @GetMapping("/experiments")
     public List<Experiment> getAllExperiments() {
         return experimentService.getAllExperiment();
+    }
+
+    /**
+     * Returns the queue position of an experiment (1-indexed).
+     * Returns 0 if the experiment is not in the queue (already running or completed).
+     */
+    @GetMapping("/experiments/{experimentId}/queue-position")
+    public Map<String, Object> getQueuePosition(@PathVariable("experimentId") Long experimentId) {
+        int position = experimentService.getQueuePosition(experimentId);
+        return Map.of(
+                "experimentId", experimentId,
+                "queuePosition", position,
+                "inQueue", position > 0
+        );
     }
 }

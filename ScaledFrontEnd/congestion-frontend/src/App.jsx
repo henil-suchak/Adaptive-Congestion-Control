@@ -1,8 +1,20 @@
-import { Routes, Route } from 'react-router-dom';
+import { Routes, Route, Navigate } from 'react-router-dom';
 import NavBar from './components/NavBar';
 import HomePage from './pages/HomePage';
 import InferenceArenaPage from './pages/InferenceArenaPage';
 import TrainingLabPage from './pages/TrainingLabPage';
+import LoginPage from './pages/LoginPage';
+import { AuthService } from './services/api';
+
+/**
+ * Protected Route wrapper — redirects to /login if not authenticated.
+ */
+function ProtectedRoute({ children }) {
+  if (!AuthService.isAuthenticated()) {
+    return <Navigate to="/login" replace />;
+  }
+  return children;
+}
 
 function App() {
   return (
@@ -10,11 +22,20 @@ function App() {
       <NavBar />
       
       {/* This is the dynamic container. The pages swap in and out right here. */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="p-6">
         <Routes>
           <Route path="/" element={<HomePage />} />
-          <Route path="/arena" element={<InferenceArenaPage />} />
-          <Route path="/lab" element={<TrainingLabPage />} />
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/arena" element={
+            <ProtectedRoute>
+              <InferenceArenaPage />
+            </ProtectedRoute>
+          } />
+          <Route path="/lab" element={
+            <ProtectedRoute>
+              <TrainingLabPage />
+            </ProtectedRoute>
+          } />
         </Routes>
       </main>
     </div>

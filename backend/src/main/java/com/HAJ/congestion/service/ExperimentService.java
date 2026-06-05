@@ -10,4 +10,5 @@ public interface ExperimentService {
    void endExperiment(Long experimentId);
    Experiment getExperimentById(Long experimentId);
    List<Experiment> getAllExperiment();
+   int getQueuePosition(Long experimentId);
 }

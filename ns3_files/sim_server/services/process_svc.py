@@ -6,7 +6,7 @@ from core.state import active_simulations
 
 WAF_DIR = "/sim/ns-allinone-3.35/ns-3.35"
 
-def start_cpp_binary(experiment_id: int):
+def start_cpp_binary(experiment_id: int, shm_id: int = 2334):
     binary_path = "/sim/ns-allinone-3.35/ns-3.35/build/scratch/rl-tcp-inference/rl-tcp-inference"
     
     # 1. Define the directory where the .so files actually exist
@@ -19,6 +19,9 @@ def start_cpp_binary(experiment_id: int):
     current_ld = custom_env.get("LD_LIBRARY_PATH", "")
     custom_env["LD_LIBRARY_PATH"] = f"{lib_path}:{current_ld}"
 
+    # 4. Pass the dynamic SHM ID to the C++ binary via environment variable
+    custom_env["NS3_SHM_ID"] = str(shm_id)
+
     process = subprocess.Popen(
         [binary_path],
         cwd=WAF_DIR,
@@ -27,7 +30,7 @@ def start_cpp_binary(experiment_id: int):
         env=custom_env
     )
     active_simulations[experiment_id] = process
-    print(f"🚀 [Process] Started C++ binary PID={process.pid} for Exp {experiment_id}", flush=True)
+    print(f"🚀 [Process] Started C++ binary PID={process.pid} for Exp {experiment_id} (SHM={shm_id})", flush=True)
     return process
 
 def kill_cpp_binary(experiment_id: int) -> bool:

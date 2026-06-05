@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-// 1. Configure the base connection to your Spring Boot backend
+// ─── Base API Client ────────────────────────────────────────────
 const apiClient = axios.create({
     baseURL: 'http://localhost:8080/api', 
     headers: {
@@ -8,6 +8,66 @@ const apiClient = axios.create({
     },
 });
 
+// ─── JWT Auth Interceptor ───────────────────────────────────────
+// Automatically attaches the JWT token to every outgoing request
+apiClient.interceptors.request.use((config) => {
+    const token = localStorage.getItem('token');
+    if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+});
+
+// ─── 401 Response Interceptor ───────────────────────────────────
+// If backend returns 401, the token is expired/invalid → force logout
+apiClient.interceptors.response.use(
+    (response) => response,
+    (error) => {
+        if (error.response && error.response.status === 401) {
+            // Don't redirect if already on login/register endpoints
+            if (!error.config.url.includes('/auth/')) {
+                localStorage.removeItem('token');
+                localStorage.removeItem('username');
+                window.location.href = '/login';
+            }
+        }
+        return Promise.reject(error);
+    }
+);
+
+// ─── Auth Service ───────────────────────────────────────────────
+export const AuthService = {
+    login: async (username, password) => {
+        const response = await apiClient.post('/auth/login', { username, password });
+        const { token, username: user } = response.data;
+        localStorage.setItem('token', token);
+        localStorage.setItem('username', user);
+        return response.data;
+    },
+
+    register: async (username, email, password) => {
+        const response = await apiClient.post('/auth/register', { username, email, password });
+        const { token, username: user } = response.data;
+        localStorage.setItem('token', token);
+        localStorage.setItem('username', user);
+        return response.data;
+    },
+
+    logout: () => {
+        localStorage.removeItem('token');
+        localStorage.removeItem('username');
+    },
+
+    isAuthenticated: () => {
+        return !!localStorage.getItem('token');
+    },
+
+    getUsername: () => {
+        return localStorage.getItem('username');
+    }
+};
+
+// ─── Experiment Service ─────────────────────────────────────────
 export const ExperimentService = {
     // Matches: POST /api/experiments
     createExperiment: async (payload) => {
@@ -16,7 +76,6 @@ export const ExperimentService = {
     },
 
     // Matches: POST /api/experiments/{experimentId}/start
-    // FIX: Added modelName to arguments and correctly placed params inside the post request
     startExperiment: async (experimentId, modelName) => {
         const response = await apiClient.post(`/experiments/${experimentId}/start`, null, {
             params: { model: modelName }
@@ -31,13 +90,25 @@ export const ExperimentService = {
     },
     
     // Matches: GET /api/experiments
-    // FIX: Changed .post to .get
     getAllExperiments: async () => {
         const response = await apiClient.get('/experiments'); 
+        return response.data;
+    },
+
+    // Matches: GET /api/experiments/{experimentId}
+    getExperimentById: async (experimentId) => {
+        const response = await apiClient.get(`/experiments/${experimentId}`);
+        return response.data;
+    },
+
+    // Matches: GET /api/experiments/{experimentId}/queue-position
+    getQueuePosition: async (experimentId) => {
+        const response = await apiClient.get(`/experiments/${experimentId}/queue-position`);
         return response.data;
     }
 };
 
+// ─── Flow Service ───────────────────────────────────────────────
 export const FlowService = {
     // Matches: GET /api/experiments/{experimentId}/flows
     getFlowsByExperiment: async (experimentId) => {

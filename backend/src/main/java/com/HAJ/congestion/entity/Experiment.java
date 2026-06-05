@@ -31,6 +31,9 @@ public class Experiment {
     @Column(nullable = false)
     private ExperimentStatus status;
 
+    @Column(nullable = true)
+    private Long userId;
+
     private LocalDateTime startTime;
 
     private LocalDateTime endTime;
@@ -107,5 +110,13 @@ public class Experiment {
 
     public void setEndTime(LocalDateTime endTime) {
         this.endTime = endTime;
+    }
+
+    public Long getUserId() {
+        return userId;
+    }
+
+    public void setUserId(Long userId) {
+        this.userId = userId;
     }
 }

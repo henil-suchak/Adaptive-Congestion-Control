@@ -1,0 +1,138 @@
+# ═══════════════════════════════════════════════════════════════════
+# PRODUCTION Docker Compose — Scaled Architecture
+#
+# Services:
+#   postgres   - PostgreSQL 16 (replaces H2)
+#   redis      - Redis 7 (caching + job queue)
+#   backend    - Spring Boot (single instance)
+#   ns3-sim-1  - NS-3 Sidecar Worker #1
+#   ns3-sim-2  - NS-3 Sidecar Worker #2
+#   nginx      - Reverse proxy + static frontend + rate limiting
+#
+# Run:
+#   docker compose -f docker-compose.scaled.yml up -d
+#
+# Open:
+#   http://localhost (via Nginx)
+# ═══════════════════════════════════════════════════════════════════
+
+services:
+
+  # ── PostgreSQL Database ────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: congestion
+      POSTGRES_USER: acc
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - cc-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U acc -d congestion"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── Redis (Cache + Job Queue) ──────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redisdata:/data
+    networks:
+      - cc-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── Spring Boot Backend (Single Instance) ──────────────────────
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/congestion
+      SPRING_DATASOURCE_USERNAME: acc
+      SPRING_DATASOURCE_PASSWORD: ${DB_PASSWORD:-changeme}
+      SPRING_DATA_REDIS_HOST: redis
+      SIDECAR_URLS: http://ns3-sim-1:8000,http://ns3-sim-2:8000
+      JWT_SECRET: ${JWT_SECRET:-myProductionSecretKeyThatIsAtLeast256BitsLongForHS256Algorithm}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - cc-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/auth/login || true"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ── NS-3 Simulation Sidecar #1 ────────────────────────────────
+  ns3-sim-1:
+    build:
+      context: .
+      dockerfile: ns3_files/Dockerfile
+    environment:
+      - WORKER_ID=1
+      - BACKEND_URL=http://backend:8080
+    depends_on:
+      - backend
+    networks:
+      - cc-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  # ── NS-3 Simulation Sidecar #2 ────────────────────────────────
+  ns3-sim-2:
+    build:
+      context: .
+      dockerfile: ns3_files/Dockerfile
+    environment:
+      - WORKER_ID=2
+      - BACKEND_URL=http://backend:8080
+    depends_on:
+      - backend
+    networks:
+      - cc-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  # ── Nginx (Reverse Proxy + Static Frontend) ────────────────────
+  nginx:
+    build:
+      context: .
+      dockerfile: nginx/Dockerfile
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - cc-network
+
+# ── Networking ───────────────────────────────────────────────────
+networks:
+  cc-network:
+    driver: bridge
+
+# ── Persistent Volumes ───────────────────────────────────────────
+volumes:
+  pgdata:
+  redisdata:

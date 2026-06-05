@@ -17,8 +17,26 @@ from services.telemetry_svc import TelemetrySender
 
 MODEL_DIR = "/sim/models"
 
+# ── Dynamic SHM ID based on WORKER_ID ────────────────────────────────────
+# Each sidecar instance gets a unique shared memory ID so multiple
+# simulations can run concurrently without SHM collisions.
+WORKER_ID = int(os.environ.get('WORKER_ID', 1))
+SHM_ID = 2333 + WORKER_ID
+print(f"🔧 [Config] Worker ID: {WORKER_ID}, SHM ID: {SHM_ID}", flush=True)
+
 # ── Track the inference subprocess so we can kill it on stop ──────────────
 _inference_process: multiprocessing.Process = None
+_current_experiment_id = None
+
+
+def get_status():
+    """Returns the current status of this sidecar (used by /status endpoint)."""
+    global _inference_process, _current_experiment_id
+    busy = _inference_process is not None and _inference_process.is_alive()
+    return {
+        "busy": busy,
+        "currentExperimentId": _current_experiment_id if busy else None
+    }
 
 
 def _shm_cleanup():
@@ -28,12 +46,12 @@ def _shm_cleanup():
     os.system("ipcrm -a 2>/dev/null || true")
 
 
-def _inference_worker(experiment_id, topology, bandwidth, delay, sim_duration, model_name):
+def _inference_worker(experiment_id, topology, bandwidth, delay, sim_duration, model_name, shm_id):
     """
     Runs in a CHILD PROCESS — the C extension 'shm_pool' has fresh state,
-    so Init(2333) always creates/attaches correctly.
+    so Init(shm_id) always creates/attaches correctly.
     """
-    print(f"🚀 [Worker] Starting inference for Exp {experiment_id} (PID={os.getpid()})...", flush=True)
+    print(f"🚀 [Worker] Starting inference for Exp {experiment_id} (PID={os.getpid()}, SHM={shm_id})...", flush=True)
 
     # Create the telemetry sender (local to this subprocess)
     sender = TelemetrySender()
@@ -65,10 +83,10 @@ def _inference_worker(experiment_id, topology, bandwidth, delay, sim_duration, m
                 f"Expected env=57, act=8. Got env={env_size}, act={act_size}"
             )
 
-        # ── Step 4: Initialize shared memory (FRESH in this process!) ────────
-        print("🔌 [Worker] Initializing Shared Memory on ID 2333...", flush=True)
-        Init(2333, 4096)
-        agent = Ns3AIRL(2333, sTcpRlInferenceEnv, TcpRlInferenceAct)
+        # ── Step 4: Initialize shared memory with DYNAMIC SHM ID ─────────────
+        print(f"🔌 [Worker] Initializing Shared Memory on ID {shm_id}...", flush=True)
+        Init(shm_id, 4096)
+        agent = Ns3AIRL(shm_id, sTcpRlInferenceEnv, TcpRlInferenceAct)
 
         # ── Step 5: Load AI model ─────────────────────────────────────────────
         model_path = os.path.join(MODEL_DIR, model_name)
@@ -83,9 +101,9 @@ def _inference_worker(experiment_id, topology, bandwidth, delay, sim_duration, m
         # ── Step 6: Start telemetry sender (Queue + WebSocket) ────────────────
         sender.start()
 
-        # ── Step 7: Launch C++ binary ─────────────────────────────────────────
+        # ── Step 7: Launch C++ binary (with dynamic SHM ID) ───────────────────
         print("🚀 [Worker] Launching NS-3 binary...", flush=True)
-        start_cpp_binary(experiment_id)
+        start_cpp_binary(experiment_id, shm_id=shm_id)
 
         # ── Step 8: Inference loop ────────────────────────────────────────────
         print("📈 [Worker] Entering inference loop (waiting for C++)...", flush=True)
@@ -182,7 +200,7 @@ def run_inference_loop(req: SimulationRequest):
     Called by FastAPI BackgroundTasks — spawns a SUBPROCESS for the inference.
     Using a subprocess ensures the C extension's global Init() state is fresh.
     """
-    global _inference_process
+    global _inference_process, _current_experiment_id
 
     # Kill any leftover inference subprocess
     if _inference_process is not None and _inference_process.is_alive():
@@ -191,6 +209,8 @@ def run_inference_loop(req: SimulationRequest):
         _inference_process.join(timeout=5)
 
     _shm_cleanup()
+
+    _current_experiment_id = req.experimentId
 
     _inference_process = multiprocessing.Process(
         target=_inference_worker,
@@ -201,16 +221,17 @@ def run_inference_loop(req: SimulationRequest):
             req.delayMs,
             req.simDuration,
             req.modelName,
+            SHM_ID,  # Pass the dynamic SHM ID
         ),
         daemon=True,
     )
     _inference_process.start()
-    print(f"🚀 [Inference] Subprocess PID={_inference_process.pid} launched for Exp {req.experimentId}", flush=True)
+    print(f"🚀 [Inference] Subprocess PID={_inference_process.pid} launched for Exp {req.experimentId} (SHM={SHM_ID})", flush=True)
 
 
 def signal_stop():
     """Called by the stop endpoint to kill the inference subprocess."""
-    global _inference_process
+    global _inference_process, _current_experiment_id
     print("🛑 [Inference] Stop signal received.", flush=True)
 
     if _inference_process is not None and _inference_process.is_alive():
@@ -219,6 +240,7 @@ def signal_stop():
         _inference_process.join(timeout=5)
         print("🛑 [Inference] Subprocess killed.", flush=True)
     _inference_process = None
+    _current_experiment_id = None
 
     # Clean up shared memory
     _shm_cleanup()

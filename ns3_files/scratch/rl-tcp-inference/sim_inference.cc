@@ -1,6 +1,7 @@
 #include <iostream>
 #include <fstream>
 #include <string>
+#include <cstdlib>
 
 #include "ns3/core-module.h"
 #include "ns3/network-module.h"
@@ -98,10 +99,12 @@ static void ConnectCubicTraces ()
 int main (int argc, char *argv[])
 {
   // ── CRITICAL: bind shared memory key FIRST before anything else ───────────
-  // Python uses Init(2333, 4096) which creates shmkey=2333 (0x0000091d).
-  // ns3-ai C++ defaults to shmkey=1234 (0x000004d2).
-  // Without this line they attach to different segments and never communicate.
-  GlobalValue::Bind ("SharedMemoryKey", UintegerValue (2333));
+  // Python uses Init(SHM_ID, 4096) where SHM_ID = 2333 + WORKER_ID.
+  // Read the dynamic SHM ID from the environment variable set by process_svc.py.
+  // This allows multiple sidecar instances to use separate shared memory segments.
+  const char* shmEnv = std::getenv("NS3_SHM_ID");
+  uint32_t shmKey = shmEnv ? (uint32_t)std::atoi(shmEnv) : 2333;
+  GlobalValue::Bind ("SharedMemoryKey", UintegerValue (shmKey));
 
   uint32_t    simDuration      = 200;
   std::string bottleneck_bw    = "2Mbps";

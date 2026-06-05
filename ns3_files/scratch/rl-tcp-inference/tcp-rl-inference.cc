@@ -1,4 +1,5 @@
 #include "tcp-rl-inference.h"
+#include <cstdlib>
 #include "ns3/log.h"
 #include "ns3/simulator.h"
 #include "ns3/tcp-socket-base.h"
@@ -71,7 +72,10 @@ void TcpRlInference::CreateEnv ()
     }
   s_envCreated = true;
 
-  env = Create<TcpRlInferenceEnv> (2333);
+  // Read dynamic SHM ID from environment (set by process_svc.py)
+  const char* shmEnv = std::getenv("NS3_SHM_ID");
+  uint16_t shmId = shmEnv ? (uint16_t)std::atoi(shmEnv) : 2333;
+  env = Create<TcpRlInferenceEnv> (shmId);
   env->SetSocketUuid (TcpRlInference::GenerateUuid ());
   ConnectSocketCallbacks ();
 }
