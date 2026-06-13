@@ -3,6 +3,7 @@ import NavBar from './components/NavBar';
 import HomePage from './pages/HomePage';
 import InferenceArenaPage from './pages/InferenceArenaPage';
 import TrainingLabPage from './pages/TrainingLabPage';
+import TopologyBuilderPage from './pages/TopologyBuilderPage';
 import LoginPage from './pages/LoginPage';
 import { AuthService } from './services/api';
 
@@ -34,6 +35,11 @@ function App() {
           <Route path="/lab" element={
             <ProtectedRoute>
               <TrainingLabPage />
+            </ProtectedRoute>
+          } />
+          <Route path="/topology" element={
+            <ProtectedRoute>
+              <TopologyBuilderPage />
             </ProtectedRoute>
           } />
         </Routes>

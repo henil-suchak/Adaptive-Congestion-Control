@@ -40,6 +40,8 @@ static constexpr double EMA_DECAY = 0.85;  // decay on idle steps
 
 // ── TcpRlEnv ─────────────────────────────────────────────────────────────────
 
+double TcpTimeStepEnv::s_bottleneckBps = 2000000.0;
+
 TcpRlEnv::TcpRlEnv (uint16_t id) : Ns3AIRL<sTcpRlEnv, TcpRlAct> (id)
 {
   SetCond (2, 0);
@@ -129,8 +131,8 @@ TcpTimeStepEnv::ScheduleNextStateRead ()
     }
   else
     {
-      // No ACKs this step (idle) — decay toward 0 slowly
-      m_smoothedRtt_us *= EMA_DECAY;
+      // No ACKs this step (idle) — decay throughput toward 0 slowly.
+      // RTT does NOT decay because physical path delay doesn't shrink during silence!
       m_smoothedTput   *= EMA_DECAY;
     }
 
@@ -169,7 +171,7 @@ TcpTimeStepEnv::ScheduleNextStateRead ()
   //
   // If smoothed RTT is available use it; otherwise fall back to 40ms (2×access_delay).
   double rttSec = (m_smoothedRtt_us > 1000.0) ? (m_smoothedRtt_us / 1e6) : 0.040;
-  double bottleneckBps = 2000000.0;                          // 2 Mbps — must match sim.cc
+  double bottleneckBps = TcpTimeStepEnv::s_bottleneckBps;  // Dynamic topology bandwidth
   uint32_t bdpBytes    = static_cast<uint32_t> (bottleneckBps * rttSec / 8.0);
   uint32_t maxCwnd     = std::max (static_cast<uint32_t>(1.5 * bdpBytes), 5 * segSize);
   uint32_t minCwnd     = segSize;

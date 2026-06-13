@@ -68,22 +68,20 @@ QUEUE_TIMEOUT   = 15            # seconds — ns-3 10ms steps should never take 
 NS3_PATH        = '/sim/ns-allinone-3.35/ns-3.35'
 
 # ── Observation normalization maximums ───────────────────────────────────────
-# Each value is the realistic maximum for that field in this simulation.
-# Dividing by these gives observations in [0, 1] for stable neural network training.
-#   cWnd:          1000 segments × 1400 bytes = 1,400,000 bytes
-#   rtt_us:        500ms = 500,000 microseconds
-#   throughput:    2Mbps bottleneck = 250,000 bytes/sec (cap at 10× for safety)
-#   packetLoss:    max 100 packets per step
-#   segmentSize:   max 1500 bytes (standard MTU)
-#   bytesInFlight: same as cWnd max = 1,400,000
-OBS_MAX = np.array([
-    1_400_000.0,   # cWnd
-    200_000.0,     # rtt_us — actual range 40,000–120,000us; 200ms gives good resolution
-    250_000.0,     # throughput (2Mbps bottleneck)
-    100.0,         # packetLoss
-    1_500.0,       # segmentSize
-    1_400_000.0,   # bytesInFlight
-], dtype=np.float32)
+# Normalization bounds are now calculated dynamically per-episode based on
+# the active network topology (bandwidth, delay) to prevent clipping when
+# using custom topologies!
+
+def parse_time_s(time_str: str) -> float:
+    if time_str.endswith("ms"): return float(time_str[:-2]) / 1000.0
+    if time_str.endswith("s"): return float(time_str[:-1])
+    return float(time_str)
+
+def parse_bps(bw_str: str) -> float:
+    if bw_str.endswith("Mbps"): return float(bw_str[:-4]) * 1_000_000.0
+    if bw_str.endswith("Kbps"): return float(bw_str[:-4]) * 1_000.0
+    if bw_str.endswith("bps"): return float(bw_str[:-3])
+    return float(bw_str)
 
 
 class Ns3TcpEnv(gym.Env):
@@ -120,6 +118,11 @@ class Ns3TcpEnv(gym.Env):
         max_steps    = DEFAULT_STEPS,
         sim_duration = 200,
         ns3_path     = NS3_PATH,
+        bottleneck_bandwidth = "2Mbps",
+        bottleneck_delay     = "20ms",
+        access_bandwidth     = "10Mbps",
+        access_delay         = "20ms",
+        queue_disc_type      = "ns3::PfifoFastQueueDisc",
     ):
         super().__init__()
         self.shm_key      = shm_key
@@ -127,6 +130,36 @@ class Ns3TcpEnv(gym.Env):
         self.max_steps    = max_steps
         self.sim_duration = sim_duration
         self.ns3_path     = ns3_path
+        self.bottleneck_bandwidth = bottleneck_bandwidth
+        self.bottleneck_delay     = bottleneck_delay
+        self.access_bandwidth     = access_bandwidth
+        self.access_delay         = access_delay
+        self.queue_disc_type      = queue_disc_type
+
+        # Calculate dynamic normalization bounds based on topology
+        bottleneck_bps = parse_bps(self.bottleneck_bandwidth)
+        access_bps     = parse_bps(self.access_bandwidth)
+        bottle_delay_s = parse_time_s(self.bottleneck_delay)
+        access_delay_s = parse_time_s(self.access_delay)
+
+        # Baseline physics limits
+        self.TMAX = bottleneck_bps / 8.0  # Max bytes per second
+        self.RTT_MIN_S = 2.0 * (bottle_delay_s + 2.0 * access_delay_s)
+        self.RTT_MIN_US = self.RTT_MIN_S * 1_000_000.0
+        self.BDP_BYTES = self.TMAX * self.RTT_MIN_S
+
+        # Realistic maximums for normalization (with headroom for burstiness)
+        self.MAX_CWND_BYTES = max(self.BDP_BYTES * 5.0, 1500.0 * 100.0)
+        self.MAX_RTT_US = max(self.RTT_MIN_US * 10.0, 200_000.0)
+        
+        self.OBS_MAX = np.array([
+            self.MAX_CWND_BYTES,      # cWnd
+            self.MAX_RTT_US,          # rtt_us
+            self.TMAX * 2.0,          # throughput (burst up to 2x capacity)
+            100.0,                    # packetLoss
+            1_500.0,                  # segmentSize
+            self.MAX_CWND_BYTES,      # bytesInFlight
+        ], dtype=np.float32)
 
         # Shared memory bridge (created once, reused across episodes)
         self._var  = None
@@ -195,6 +228,11 @@ class Ns3TcpEnv(gym.Env):
             'simSeed':        sim_seed,
             'data':           10000,   # 10,000 MB ≈ unlimited for any sim_duration
                                        # data=0 means 0 MB (send nothing!) — NOT unlimited
+            'bottleneck_bandwidth': self.bottleneck_bandwidth,
+            'bottleneck_delay':     self.bottleneck_delay,
+            'access_bandwidth':     self.access_bandwidth,
+            'access_delay':         self.access_delay,
+            'queue_disc_type':      self.queue_disc_type,
         }
         print("[Env] Step 5: Starting new ns-3...", flush=True)
         self._exp.run(setting=setting, show_output=True)
@@ -254,11 +292,11 @@ class Ns3TcpEnv(gym.Env):
         # 2. Compute reward
         reward = self._compute_reward(obs_dict)
 
-        # 3. Compute action — cWnd multiplier capped to 1000 segments max
+        # 3. Compute action — cWnd multiplier capped to dynamic max segments
         factor    = float(np.clip(action[0], 0.8, 1.2))
         cWnd      = obs_dict['cWnd']
         seg_size  = max(obs_dict['segmentSize'], 340)
-        MAX_CWND  = seg_size * 1000   # 1000 segments = realistic max for 2Mbps link
+        MAX_CWND  = max(self.MAX_CWND_BYTES, seg_size * 10)
         new_cWnd  = int(np.clip(cWnd * factor, seg_size, MAX_CWND))
         if factor < 1.0:
             new_ssThresh = int(new_cWnd * 0.75)
@@ -362,7 +400,7 @@ class Ns3TcpEnv(gym.Env):
 
                     # Write the pending action (from previous step or default)
                     seg_size  = max(obs_dict.get('segmentSize', 340), 340)
-                    MAX_CWND  = seg_size * 1000
+                    MAX_CWND  = max(self.MAX_CWND_BYTES, seg_size * 10)
                     MIN_CWND  = seg_size
                     safe_cWnd     = int(np.clip(pending_action['new_cWnd'],     MIN_CWND, MAX_CWND))
                     safe_ssThresh = int(np.clip(pending_action['new_ssThresh'], MIN_CWND, MAX_CWND * 2))
@@ -410,14 +448,14 @@ class Ns3TcpEnv(gym.Env):
             return 0.0
 
         # 1. Throughput: sqrt gives gradient at all levels
-        TMAX        = 250_000.0
+        TMAX        = self.TMAX
         tput_norm   = min(throughput / TMAX, 1.0)
         reward_tput = float(np.sqrt(tput_norm))
 
-        # 2. RTT: quadratic penalty above 40ms physical baseline
-        RTT_MIN     = 40_020.0
+        # 2. RTT: quadratic penalty above physical baseline
+        RTT_MIN     = self.RTT_MIN_US
         rtt_safe    = max(rtt_us, RTT_MIN)
-        excess      = max(rtt_safe - RTT_MIN, 0.0) / 400_000.0
+        excess      = max(rtt_safe - RTT_MIN, 0.0) / (RTT_MIN * 10.0)  # scale by baseline
         penalty_rtt = min(excess ** 2 * 12.0, 1.0)
 
         # 3. Loss: hard base + proportional
@@ -427,7 +465,7 @@ class Ns3TcpEnv(gym.Env):
             penalty_loss = 0.0
 
         # 4. Stability: small bonus for cWnd near BDP, only when tput is high
-        BDP        = 10_000.0
+        BDP        = max(self.BDP_BYTES, 10_000.0)
         cwnd_ratio = cWnd / BDP
         gauss      = float(np.exp(-((cwnd_ratio - 1.0) ** 2) / (2 * 0.5 ** 2)))
         stability  = 0.1 * tput_norm * gauss
@@ -446,7 +484,7 @@ class Ns3TcpEnv(gym.Env):
             obs_dict['segmentSize'],
             obs_dict['bytesInFlight'],
         ], dtype=np.float32)
-        return np.clip(raw / OBS_MAX, 0.0, 1.0)
+        return np.clip(raw / self.OBS_MAX, 0.0, 1.0)
 
     def _stop_background_thread(self):
         if self._loop_thread and self._loop_thread.is_alive():

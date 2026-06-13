@@ -97,6 +97,8 @@ public:
   virtual void CongestionStateSet (Ptr<TcpSocketState> tcb,
                                    const TcpSocketState::TcpCongState_t newState);
   virtual void CwndEvent (Ptr<TcpSocketState> tcb, const TcpSocketState::TcpCAEvent_t event);
+public:
+  static double s_bottleneckBps;
 
 private:
   void ScheduleNextStateRead ();

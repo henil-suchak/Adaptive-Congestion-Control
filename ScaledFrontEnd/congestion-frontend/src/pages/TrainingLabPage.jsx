@@ -1,17 +1,16 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { ExperimentService, TrainingService } from '../services/api';
+import { TopologyService } from '../services/topologyApi';
 import SockJS from 'sockjs-client';
 import { Client } from '@stomp/stompjs';
 
 export default function TrainingLabPage() {
   // ── Topology Config ──────────────────────────────────────────
   const [formData, setFormData] = useState({
-    name: 'My Custom Topology',
-    topology: 'dumbbell-dual',
-    bottleneckBandwidthMbps: 2.0,
-    baseDelayMs: 20.0,
-    queueType: 'FqCoDel'
+    name: 'My Training Run',
+    topologyId: '',
   });
+  const [topologies, setTopologies] = useState([]);
 
   // ── Training Hyperparameters ─────────────────────────────────
   const [hyperparams, setHyperparams] = useState({
@@ -29,19 +28,25 @@ export default function TrainingLabPage() {
   const stompRef = useRef(null);
   const canvasRef = useRef(null);
 
-  // ── Load training runs on mount ──────────────────────────────
-  useEffect(() => {
-    loadTrainingRuns();
-  }, []);
-
-  const loadTrainingRuns = async () => {
+  // ── Load training runs ────────────────────────────────────────
+  const loadTrainingRuns = useCallback(async () => {
     try {
       const runs = await TrainingService.getTrainingRuns();
       setTrainingRuns(runs);
     } catch (e) {
       console.error('Failed to load training runs:', e);
     }
-  };
+  }, []);
+
+  // ── Load training runs on mount ──────────────────────────────
+  // ── Load training runs on mount ──────────────────────────────
+  useEffect(() => {
+    loadTrainingRuns().catch(console.error);
+  }, [loadTrainingRuns]);
+
+  useEffect(() => {
+    TopologyService.getAll().then(setTopologies).catch(console.error);
+  }, []);
 
   // ── Draw reward chart ────────────────────────────────────────
   const drawChart = useCallback(() => {
@@ -175,14 +180,15 @@ export default function TrainingLabPage() {
         stompRef.current.deactivate();
       }
     };
-  }, [activeRun?.id]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeRun?.id, loadTrainingRuns]);
 
   // ── Handlers ─────────────────────────────────────────────────
   const handleChange = (e) => {
     const { name, value } = e.target;
     setFormData({
       ...formData,
-      [name]: name.includes('Mbps') || name.includes('Ms') ? parseFloat(value) : value
+      [name]: value
     });
   };
 
@@ -202,7 +208,17 @@ export default function TrainingLabPage() {
       // Step 1: Create experiment (topology config)
       let expId = experimentId;
       if (!expId) {
-        const result = await ExperimentService.createExperiment(formData);
+        if (!formData.topologyId) throw new Error("Please select a topology");
+        const topo = topologies.find(t => t.id === Number(formData.topologyId));
+        const payload = {
+          name: formData.name,
+          topologyId: topo.id,
+          topology: 'dumbbell-dual',
+          bottleneckBandwidthMbps: topo.bottleneckBandwidthMbps,
+          baseDelayMs: topo.bottleneckDelayMs,
+          queueType: topo.queueType
+        };
+        const result = await ExperimentService.createExperiment(payload);
         expId = result.experimentId;
         setExperimentId(expId);
       }
@@ -283,26 +299,13 @@ export default function TrainingLabPage() {
                 style={inputStyle} />
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
-              <div>
-                <label style={labelStyle}>Bandwidth (Mbps)</label>
-                <input type="number" step="0.1" name="bottleneckBandwidthMbps"
-                  value={formData.bottleneckBandwidthMbps} onChange={handleChange} style={inputStyle} />
-              </div>
-              <div>
-                <label style={labelStyle}>Base Delay (ms)</label>
-                <input type="number" step="1" name="baseDelayMs"
-                  value={formData.baseDelayMs} onChange={handleChange} style={inputStyle} />
-              </div>
-            </div>
-
-            <div>
-              <label style={labelStyle}>Queue Type</label>
-              <select name="queueType" value={formData.queueType} onChange={handleChange}
-                style={inputStyle}>
-                <option value="FqCoDel">FqCoDel</option>
-                <option value="DropTail">DropTail</option>
-                <option value="RED">RED</option>
+            <div style={{ marginBottom: '12px' }}>
+              <label style={labelStyle}>Select Topology</label>
+              <select name="topologyId" value={formData.topologyId} onChange={handleChange} style={inputStyle}>
+                <option value="">-- Choose Topology --</option>
+                {topologies.map(t => (
+                  <option key={t.id} value={t.id}>{t.name} ({t.topologyType})</option>
+                ))}
               </select>
             </div>
           </div>

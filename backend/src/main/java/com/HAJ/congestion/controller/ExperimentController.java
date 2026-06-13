@@ -20,7 +20,8 @@ public class ExperimentController {
     public Experiment createExperiment(@RequestBody Experiment experiment) {
         return experimentService.createExperiment(
                 experiment.getName(), experiment.getTopology(),
-                experiment.getBottleneckBandwidthMbps(), experiment.getBaseDelayMs(), experiment.getQueueType()
+                experiment.getBottleneckBandwidthMbps(), experiment.getBaseDelayMs(), experiment.getQueueType(),
+                experiment.getTopologyId()
         );
     }
 

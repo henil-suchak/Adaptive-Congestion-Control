@@ -34,6 +34,9 @@ public class Experiment {
     @Column(nullable = true)
     private Long userId;
 
+    @Column(nullable = true)
+    private Long topologyId;
+
     private LocalDateTime startTime;
 
     private LocalDateTime endTime;
@@ -118,5 +121,13 @@ public class Experiment {
 
     public void setUserId(Long userId) {
         this.userId = userId;
+    }
+
+    public Long getTopologyId() {
+        return topologyId;
+    }
+
+    public void setTopologyId(Long topologyId) {
+        this.topologyId = topologyId;
     }
 }

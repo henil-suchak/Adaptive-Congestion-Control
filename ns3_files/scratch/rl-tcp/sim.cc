@@ -135,6 +135,9 @@ main (int argc, char *argv[])
   cmd.AddValue ("recovery", "Recovery algorithm type to use (e.g., ns3::TcpPrrRecovery", recovery);
   cmd.Parse (argc, argv);
 
+  DataRate dr (bottleneck_bandwidth);
+  TcpTimeStepEnv::s_bottleneckBps = dr.GetBitRate ();
+
   SeedManager::SetSeed (1);
   SeedManager::SetRun (run);
 

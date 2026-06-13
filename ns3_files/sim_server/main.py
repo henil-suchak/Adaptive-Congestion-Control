@@ -83,6 +83,11 @@ async def start_training(req: TrainingRequest):
         "totalTimesteps": req.totalTimesteps,
         "learningRate": req.learningRate,
         "networkArch": req.networkArch,
+        "bottleneckBw": f"{req.bandwidthMbps}Mbps",
+        "bottleneckDelay": f"{req.delayMs}ms",
+        "accessBw": f"{req.accessBandwidthMbps}Mbps",
+        "accessDelay": f"{req.accessDelayMs}ms",
+        "queueType": req.queueType,
     }
     run_training(config)
     return {

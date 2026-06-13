@@ -18,6 +18,11 @@ def parse_args():
     p.add_argument("--save_path",     type=str,   default="./checkpoints/")
     p.add_argument("--log_interval",  type=int,   default=100)
     p.add_argument("--resume",        type=str,   default=None)
+    p.add_argument("--bottleneck_bandwidth", type=str, default="2Mbps")
+    p.add_argument("--bottleneck_delay", type=str, default="20ms")
+    p.add_argument("--access_bandwidth", type=str, default="10Mbps")
+    p.add_argument("--access_delay", type=str, default="20ms")
+    p.add_argument("--queue_disc_type", type=str, default="ns3::PfifoFastQueueDisc")
     return p.parse_args()
 
 
@@ -82,6 +87,11 @@ def main():
     env = Ns3TcpEnv(
         shm_key=args.shm_key, shm_size=1_048_576,
         max_steps=steps_per_episode, sim_duration=sim_duration,
+        bottleneck_bandwidth=args.bottleneck_bandwidth,
+        bottleneck_delay=args.bottleneck_delay,
+        access_bandwidth=args.access_bandwidth,
+        access_delay=args.access_delay,
+        queue_disc_type=args.queue_disc_type,
     )
 
     if args.resume and os.path.exists(args.resume):

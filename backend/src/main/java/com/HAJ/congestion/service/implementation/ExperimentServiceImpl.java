@@ -37,9 +37,10 @@ public class ExperimentServiceImpl implements ExperimentService {
 
     @Override
     @CacheEvict(value = "experiments", allEntries = true)
-    public Experiment createExperiment(String Name, String Topology, Double bottleneckBandwidthMbps, Double baseDelayMs, String queueType) {
+    public Experiment createExperiment(String Name, String Topology, Double bottleneckBandwidthMbps, Double baseDelayMs, String queueType, Long topologyId) {
         Experiment experiment = new Experiment(Name, Topology, bottleneckBandwidthMbps, baseDelayMs, queueType, ExperimentStatus.CREATED);
         experiment.setUserId(securityUtils.getCurrentUserId());
+        experiment.setTopologyId(topologyId);
         return experimentRepository.save(experiment);
     }
 

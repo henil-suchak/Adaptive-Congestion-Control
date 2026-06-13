@@ -27,6 +27,7 @@ export default function NavBar() {
           <>
             <Link to="/arena" className={linkClass('/arena')}>Inference Arena</Link>
             <Link to="/lab" className={linkClass('/lab')}>Training Lab</Link>
+            <Link to="/topology" className={linkClass('/topology')}>Topology Builder</Link>
           </>
         )}
 

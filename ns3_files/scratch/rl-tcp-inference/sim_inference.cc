@@ -117,13 +117,18 @@ int main (int argc, char *argv[])
   CommandLine cmd;
   cmd.AddValue ("duration",   "Simulation duration (s)",   simDuration);
   cmd.AddValue ("cubicTrace", "CUBIC metrics output file", cubicTraceFile);
+  cmd.AddValue ("bottleneckBw",    "Bottleneck bandwidth",    bottleneck_bw);
+  cmd.AddValue ("bottleneckDelay", "Bottleneck delay",        bottleneck_delay);
+  cmd.AddValue ("accessBw",        "Access link bandwidth",   access_bw);
+  cmd.AddValue ("accessDelay",     "Access link delay",       access_delay);
+  cmd.AddValue ("mtu",             "MTU in bytes",            mtu_bytes);
   cmd.Parse (argc, argv);
 
   Config::SetDefault ("ns3::TcpSocket::SegmentSize", UintegerValue (mtu_bytes - 60));
   Config::SetDefault ("ns3::TcpSocket::DelAckCount", UintegerValue (1));
   Config::SetDefault ("ns3::TcpSocket::RcvBufSize",  UintegerValue (1 << 21));
   Config::SetDefault ("ns3::TcpSocket::SndBufSize",  UintegerValue (1 << 21));
-  g_cubicSegSize = mtu_bytes - 60;
+  g_cubicSegSize = mtu_bytes - 60;  // After cmd.Parse so user-supplied mtu is used
 
   NodeContainer routers, leftNodes, rightNodes;
   routers.Create (2);

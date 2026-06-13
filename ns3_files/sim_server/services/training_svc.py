@@ -117,7 +117,10 @@ def _post_checkpoint(training_run_id, experiment_id, checkpoint_name, total_step
         print(f"⚠️ [Training] Failed to post checkpoint: {e}", flush=True)
 
 
-def _training_worker(training_run_id, experiment_id, total_timesteps, learning_rate, network_arch):
+def _training_worker(training_run_id, experiment_id, total_timesteps, learning_rate, network_arch,
+                     bottleneck_bw="2Mbps", bottleneck_delay="20ms",
+                     access_bw="10Mbps", access_delay="20ms",
+                     queue_type="ns3::PfifoFastQueueDisc"):
     """
     Main training worker function. Runs in a separate thread.
     Spawns train_sac.py, parses output, streams metrics.
@@ -145,6 +148,11 @@ def _training_worker(training_run_id, experiment_id, total_timesteps, learning_r
         "--shm_key", str(shm_key),
         "--save_path", save_path,
         "--log_interval", "50",
+        "--bottleneck_bandwidth", str(bottleneck_bw),
+        "--bottleneck_delay", str(bottleneck_delay),
+        "--access_bandwidth", str(access_bw),
+        "--access_delay", str(access_delay),
+        "--queue_disc_type", str(queue_type),
     ]
 
     print(f"🎓 [Training] Starting train_sac.py for run #{training_run_id}", flush=True)
@@ -342,6 +350,11 @@ def run_training(config: dict):
             config["totalTimesteps"],
             config.get("learningRate", 3e-4),
             config.get("networkArch", "256,256,128"),
+            config.get("bottleneckBw", "2Mbps"),
+            config.get("bottleneckDelay", "20ms"),
+            config.get("accessBw", "10Mbps"),
+            config.get("accessDelay", "20ms"),
+            config.get("queueType", "ns3::PfifoFastQueueDisc"),
         ),
         daemon=True,
     )

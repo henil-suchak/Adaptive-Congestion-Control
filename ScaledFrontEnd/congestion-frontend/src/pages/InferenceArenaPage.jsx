@@ -3,6 +3,7 @@ import { Client } from '@stomp/stompjs';
 import SockJS from 'sockjs-client';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { ExperimentService, ModelService } from '../services/api';
+import { TopologyService } from '../services/topologyApi';
 
 export default function InferenceArenaPage() {
   // 1. React State
@@ -15,7 +16,16 @@ export default function InferenceArenaPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [experimentStatus, setExperimentStatus] = useState(null);
   const [queuePosition, setQueuePosition] = useState(0);
+  const [topologies, setTopologies] = useState([]);
+  const [selectedTopologyId, setSelectedTopologyId] = useState('');
+  const [newExpName, setNewExpName] = useState('My Inference Run');
+  const [isCreatingExp, setIsCreatingExp] = useState(false);
   const pollingRef = useRef(null);
+
+  // Fetch topologies
+  useEffect(() => {
+    TopologyService.getAll().then(setTopologies).catch(console.error);
+  }, []);
 
   // 2. Fetch all experiments when the page loads
   useEffect(() => {
@@ -111,6 +121,34 @@ export default function InferenceArenaPage() {
     }
   };
 
+  // 4b. Create a new experiment with a topology
+  const handleCreateExperiment = async () => {
+    if (!selectedTopologyId || isCreatingExp) return;
+    setIsCreatingExp(true);
+    try {
+      const topo = topologies.find(t => t.id === Number(selectedTopologyId));
+      if (!topo) return;
+      const payload = {
+        name: newExpName,
+        topologyId: topo.id,
+        topology: 'dumbbell-dual', // legacy field
+        bottleneckBandwidthMbps: topo.bottleneckBandwidthMbps,
+        baseDelayMs: topo.bottleneckDelayMs,
+        queueType: topo.queueType
+      };
+      const result = await ExperimentService.createExperiment(payload);
+      
+      // Add to available experiments and select it
+      setAvailableExperiments(prev => [result, ...prev]);
+      setTargetExperimentId(result.experimentId);
+      
+    } catch (error) {
+      console.error("Failed to create experiment:", error);
+    } finally {
+      setIsCreatingExp(false);
+    }
+  };
+
   // 5. Trigger the kill switch
   const handleStopSimulation = async () => {
     if (!targetExperimentId || isLoading) return;
@@ -129,6 +167,8 @@ export default function InferenceArenaPage() {
 
   // 6. Setup the WebSocket Connection
   useEffect(() => {
+    if (!targetExperimentId) return;
+
     const socket = new SockJS('http://localhost:8080/ws');
     
     const stompClient = new Client({
@@ -137,18 +177,21 @@ export default function InferenceArenaPage() {
       reconnectDelay: 5000,
     });
 
-    stompClient.onConnect = (frame) => {
-      console.log('Connected to Spring Boot STOMP Broker');
+    stompClient.onConnect = () => {
+      console.log(`Connected to Spring Boot STOMP Broker for Exp ${targetExperimentId}`);
       setIsConnected(true);
 
-      stompClient.subscribe('/topic/metrics', (message) => {
+      stompClient.subscribe(`/topic/metrics/${targetExperimentId}`, (message) => {
         const newMetric = JSON.parse(message.body);
         
         // Auto-detect RUNNING status from incoming metrics
-        if (experimentStatus === 'QUEUED') {
-          setExperimentStatus('RUNNING');
-          setQueuePosition(0);
-        }
+        setExperimentStatus(prevStatus => {
+          if (prevStatus === 'QUEUED') {
+            setQueuePosition(0);
+            return 'RUNNING';
+          }
+          return prevStatus;
+        });
         
         setMetricsData((prevData) => {
           const updatedData = [...prevData, newMetric];
@@ -174,7 +217,7 @@ export default function InferenceArenaPage() {
         stompClient.deactivate();
       }
     };
-  }, []);
+  }, [targetExperimentId]);
 
   return (
     <div className="max-w-6xl mx-auto">
@@ -219,6 +262,39 @@ export default function InferenceArenaPage() {
           </div>
         </div>
       )}
+
+      {/* NEW: Experiment Creation Panel */}
+      <div className="bg-white rounded-xl p-4 mb-6 shadow-sm border border-gray-200 flex flex-wrap gap-4 items-end">
+        <div>
+          <label className="block text-xs font-semibold text-gray-600 mb-1">New Inference Run Name</label>
+          <input 
+            type="text" 
+            value={newExpName} 
+            onChange={e => setNewExpName(e.target.value)}
+            className="px-3 py-2 border border-gray-300 rounded-lg text-sm w-48 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-gray-600 mb-1">Select Topology</label>
+          <select 
+            value={selectedTopologyId} 
+            onChange={e => setSelectedTopologyId(e.target.value)}
+            className="px-3 py-2 border border-gray-300 rounded-lg text-sm w-48 focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+          >
+            <option value="">-- Choose Topology --</option>
+            {topologies.map(t => (
+              <option key={t.id} value={t.id}>{t.name} ({t.topologyType})</option>
+            ))}
+          </select>
+        </div>
+        <button 
+          onClick={handleCreateExperiment}
+          disabled={!selectedTopologyId || isCreatingExp}
+          className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-bold hover:bg-indigo-700 disabled:opacity-50 transition"
+        >
+          {isCreatingExp ? 'Creating...' : '+ Create New Run'}
+        </button>
+      </div>
 
       {/* Control Panel */}
       <div className="bg-slate-900 rounded-xl p-4 mb-6 text-white flex justify-between items-center shadow-md">

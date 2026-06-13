@@ -46,7 +46,8 @@ def _shm_cleanup():
     os.system("ipcrm -a 2>/dev/null || true")
 
 
-def _inference_worker(experiment_id, topology, bandwidth, delay, sim_duration, model_name, shm_id):
+def _inference_worker(experiment_id, topology, bandwidth, delay, sim_duration, model_name, shm_id,
+                      access_bw=10.0, access_delay=20.0, queue_type="FqCoDel", mtu=400):
     """
     Runs in a CHILD PROCESS — the C extension 'shm_pool' has fresh state,
     so Init(shm_id) always creates/attaches correctly.
@@ -103,7 +104,14 @@ def _inference_worker(experiment_id, topology, bandwidth, delay, sim_duration, m
 
         # ── Step 7: Launch C++ binary (with dynamic SHM ID) ───────────────────
         print("🚀 [Worker] Launching NS-3 binary...", flush=True)
-        start_cpp_binary(experiment_id, shm_id=shm_id)
+        start_cpp_binary(
+            experiment_id, shm_id=shm_id,
+            bottleneck_bw=f"{bandwidth}Mbps",
+            bottleneck_delay=f"{delay}ms",
+            access_bw=f"{access_bw}Mbps",
+            access_delay=f"{access_delay}ms",
+            mtu=mtu
+        )
 
         # ── Step 8: Inference loop ────────────────────────────────────────────
         print("📈 [Worker] Entering inference loop (waiting for C++)...", flush=True)
@@ -222,6 +230,10 @@ def run_inference_loop(req: SimulationRequest):
             req.simDuration,
             req.modelName,
             SHM_ID,  # Pass the dynamic SHM ID
+            req.accessBandwidthMbps,
+            req.accessDelayMs,
+            req.queueType,
+            req.mtu,
         ),
         daemon=True,
     )

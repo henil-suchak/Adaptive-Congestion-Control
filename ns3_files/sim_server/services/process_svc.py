@@ -6,7 +6,10 @@ from core.state import active_simulations
 
 WAF_DIR = "/sim/ns-allinone-3.35/ns-3.35"
 
-def start_cpp_binary(experiment_id: int, shm_id: int = 2334):
+def start_cpp_binary(experiment_id: int, shm_id: int = 2334,
+                     bottleneck_bw: str = "2Mbps", bottleneck_delay: str = "20ms",
+                     access_bw: str = "10Mbps", access_delay: str = "20ms",
+                     mtu: int = 400):
     binary_path = "/sim/ns-allinone-3.35/ns-3.35/build/scratch/rl-tcp-inference/rl-tcp-inference"
     
     # 1. Define the directory where the .so files actually exist
@@ -23,7 +26,12 @@ def start_cpp_binary(experiment_id: int, shm_id: int = 2334):
     custom_env["NS3_SHM_ID"] = str(shm_id)
 
     process = subprocess.Popen(
-        [binary_path],
+        [binary_path,
+         f"--bottleneckBw={bottleneck_bw}",
+         f"--bottleneckDelay={bottleneck_delay}",
+         f"--accessBw={access_bw}",
+         f"--accessDelay={access_delay}",
+         f"--mtu={mtu}"],
         cwd=WAF_DIR,
         stdout=sys.stdout,
         stderr=sys.stderr,
