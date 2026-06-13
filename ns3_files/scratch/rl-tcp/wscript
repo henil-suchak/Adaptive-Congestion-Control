@@ -1,0 +1,8 @@
+def build(bld):
+    obj = bld.create_ns3_program('rl-tcp', ['core', 'network', 'internet', 'point-to-point', 'applications', 'traffic-control'])
+    obj.source = 'sim.cc tcp-rl-env.cc tcp-rl.cc'
+    
+    # Include ns3-ai model headers
+    obj.includes = ['/sim/ns-allinone-3.35/ns-3.35/contrib/ns3-ai/model']
+    obj.source += ' /sim/ns-allinone-3.35/ns-3.35/contrib/ns3-ai/model/ns3-ai-module.cc'
+

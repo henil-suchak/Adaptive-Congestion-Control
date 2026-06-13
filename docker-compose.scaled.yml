@@ -80,11 +80,13 @@ services:
   # ── NS-3 Simulation Sidecar #1 ────────────────────────────────
   ns3-sim-1:
     build:
-      context: .
-      dockerfile: ns3_files/Dockerfile
+      context: ./ns3_files
+      dockerfile: Dockerfile
     environment:
       - WORKER_ID=1
       - BACKEND_URL=http://backend:8080
+    volumes:
+      - model-store:/sim/models
     depends_on:
       - backend
     networks:
@@ -99,11 +101,13 @@ services:
   # ── NS-3 Simulation Sidecar #2 ────────────────────────────────
   ns3-sim-2:
     build:
-      context: .
-      dockerfile: ns3_files/Dockerfile
+      context: ./ns3_files
+      dockerfile: Dockerfile
     environment:
       - WORKER_ID=2
       - BACKEND_URL=http://backend:8080
+    volumes:
+      - model-store:/sim/models
     depends_on:
       - backend
     networks:
@@ -136,3 +140,4 @@ networks:
 volumes:
   pgdata:
   redisdata:
+  model-store:    # Shared model storage across sidecars

@@ -30,9 +30,10 @@ RUN COMMIT=$(git rev-list HEAD | while read commit; do \
 
 # 5. Copy custom code
 WORKDIR /sim/ns-allinone-3.35/ns-3.35
-COPY ns3_files/scratch/rl-tcp-inference scratch/rl-tcp-inference/
-COPY ns3_files/contrib/ns3-ai/py_interface/py_interface.py contrib/ns3-ai/py_interface/
-COPY ns3_files/contrib/ns3-ai/examples/rl-tcp/ contrib/ns3-ai/examples/rl-tcp/
+COPY scratch/rl-tcp-inference scratch/rl-tcp-inference/
+COPY scratch/rl-tcp scratch/rl-tcp/
+COPY contrib/ns3-ai/py_interface/py_interface.py contrib/ns3-ai/py_interface/
+COPY contrib/ns3-ai/examples/rl-tcp/ contrib/ns3-ai/examples/rl-tcp/
 
 # 6. Venv setup
 RUN python3 -m venv /sim/ns3env
@@ -47,8 +48,11 @@ RUN pip install --upgrade pip \
 WORKDIR /sim/ns-allinone-3.35/ns-3.35
 RUN ./waf configure \
     --disable-python \
-    --enable-modules=core,network,internet,point-to-point,applications,stats,traffic-control,ns3-ai \
+    --enable-modules=core,network,internet,point-to-point,point-to-point-layout,applications,stats,traffic-control,ns3-ai,flow-monitor \
     && ./waf build
+
+# 8b. Make NS-3 shared libraries globally visible to ALL binaries
+ENV LD_LIBRARY_PATH="/sim/ns-allinone-3.35/ns-3.35/build/lib:${LD_LIBRARY_PATH}"
 
 # 9. Build shm_pool Python C-extension AFTER waf
 RUN cd contrib/ns3-ai/py_interface && pip install .
@@ -59,12 +63,12 @@ RUN find /sim/ns3env/lib -name "*shm_pool*" \
     || (echo "❌ shm_pool.so MISSING - build failed" && exit 1)
 
 # 11. Copy models
-COPY ns3_files/models/ /sim/models/
+COPY models/ /sim/models/
 
 # 12. Copy sim_server — py_interface.py must NOT exist in this folder
-# Verify before building: ls ns3_files/sim_server/services/
+# Verify before building: ls sim_server/services/
 # py_interface.py must not be listed there
-COPY ns3_files/sim_server/ /sim/sim_server/
+COPY sim_server/ /sim/sim_server/
 
 # 13. Delete any stray py_interface.py copies that snuck in via sim_server
 # This is a hard guarantee — even if one accidentally exists, it gets removed

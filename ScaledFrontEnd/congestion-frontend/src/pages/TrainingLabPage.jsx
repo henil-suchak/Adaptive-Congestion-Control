@@ -1,8 +1,10 @@
-import { useState } from 'react';
-import { ExperimentService } from '../services/api';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { ExperimentService, TrainingService } from '../services/api';
+import SockJS from 'sockjs-client';
+import { Client } from '@stomp/stompjs';
 
 export default function TrainingLabPage() {
-  // 1. The React State (Holds the data while the user types)
+  // ── Topology Config ──────────────────────────────────────────
   const [formData, setFormData] = useState({
     name: 'My Custom Topology',
     topology: 'dumbbell-dual',
@@ -11,9 +13,171 @@ export default function TrainingLabPage() {
     queueType: 'FqCoDel'
   });
 
-  const [status, setStatus] = useState('');
+  // ── Training Hyperparameters ─────────────────────────────────
+  const [hyperparams, setHyperparams] = useState({
+    totalTimesteps: 500000,
+    learningRate: 3e-4,
+    networkArch: '256,256,128',
+  });
 
-  // 2. Handle input changes
+  // ── State ────────────────────────────────────────────────────
+  const [status, setStatus] = useState('');
+  const [experimentId, setExperimentId] = useState(null);
+  const [activeRun, setActiveRun] = useState(null);
+  const [trainingRuns, setTrainingRuns] = useState([]);
+  const [rewardHistory, setRewardHistory] = useState([]);
+  const stompRef = useRef(null);
+  const canvasRef = useRef(null);
+
+  // ── Load training runs on mount ──────────────────────────────
+  useEffect(() => {
+    loadTrainingRuns();
+  }, []);
+
+  const loadTrainingRuns = async () => {
+    try {
+      const runs = await TrainingService.getTrainingRuns();
+      setTrainingRuns(runs);
+    } catch (e) {
+      console.error('Failed to load training runs:', e);
+    }
+  };
+
+  // ── Draw reward chart ────────────────────────────────────────
+  const drawChart = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || rewardHistory.length === 0) return;
+
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width;
+    const H = canvas.height;
+    const pad = { top: 30, right: 20, bottom: 40, left: 60 };
+    const plotW = W - pad.left - pad.right;
+    const plotH = H - pad.top - pad.bottom;
+
+    ctx.clearRect(0, 0, W, H);
+
+    // Background
+    ctx.fillStyle = '#0f172a';
+    ctx.fillRect(0, 0, W, H);
+
+    // Grid
+    const rewards = rewardHistory.map(d => d.reward);
+    const minR = Math.min(...rewards, -0.5);
+    const maxR = Math.max(...rewards, 0.5);
+    const range = maxR - minR || 1;
+
+    ctx.strokeStyle = '#1e293b';
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 4; i++) {
+      const y = pad.top + (plotH * i) / 4;
+      ctx.beginPath();
+      ctx.moveTo(pad.left, y);
+      ctx.lineTo(W - pad.right, y);
+      ctx.stroke();
+
+      const val = maxR - (range * i) / 4;
+      ctx.fillStyle = '#64748b';
+      ctx.font = '11px Inter, sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText(val.toFixed(2), pad.left - 8, y + 4);
+    }
+
+    // Plot line
+    ctx.strokeStyle = '#22d3ee';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    rewardHistory.forEach((d, i) => {
+      const x = pad.left + (plotW * i) / Math.max(rewardHistory.length - 1, 1);
+      const y = pad.top + plotH - ((d.reward - minR) / range) * plotH;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    // Gradient fill under line
+    const gradient = ctx.createLinearGradient(0, pad.top, 0, pad.top + plotH);
+    gradient.addColorStop(0, 'rgba(34, 211, 238, 0.3)');
+    gradient.addColorStop(1, 'rgba(34, 211, 238, 0.0)');
+    ctx.lineTo(pad.left + plotW, pad.top + plotH);
+    ctx.lineTo(pad.left, pad.top + plotH);
+    ctx.closePath();
+    ctx.fillStyle = gradient;
+    ctx.fill();
+
+    // Labels
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '12px Inter, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Episode', W / 2, H - 5);
+
+    ctx.save();
+    ctx.translate(15, H / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText('Avg Reward', 0, 0);
+    ctx.restore();
+
+    // Title
+    ctx.fillStyle = '#e2e8f0';
+    ctx.font = 'bold 14px Inter, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('Training Reward Curve', pad.left, 20);
+  }, [rewardHistory]);
+
+  useEffect(() => {
+    drawChart();
+  }, [drawChart]);
+
+  // ── WebSocket subscription for training progress ─────────────
+  useEffect(() => {
+    if (!activeRun) return;
+
+    const client = new Client({
+      webSocketFactory: () => new SockJS('http://localhost:8080/ws'),
+      reconnectDelay: 3000,
+      onConnect: () => {
+        client.subscribe(`/topic/training/${activeRun.id}`, (msg) => {
+          try {
+            const data = JSON.parse(msg.body);
+            setActiveRun(prev => ({
+              ...prev,
+              currentTimestep: data.currentTimestep || prev.currentTimestep,
+              currentEpisode: data.currentEpisode || prev.currentEpisode,
+              latestAvgReward: data.avgReward ?? prev.latestAvgReward,
+              status: data.status === 'completed' ? 'COMPLETED' :
+                      data.status === 'failed' ? 'FAILED' :
+                      prev.status,
+              modelFileName: data.modelFileName || prev.modelFileName,
+            }));
+
+            if (data.eventType === 'episodeEnd' || data.currentEpisode) {
+              setRewardHistory(prev => [...prev, {
+                episode: data.currentEpisode,
+                reward: data.avgReward,
+                step: data.currentTimestep,
+              }]);
+            }
+
+            if (data.status === 'completed' || data.status === 'failed') {
+              loadTrainingRuns();
+            }
+          } catch (e) {
+            console.error('WS parse error:', e);
+          }
+        });
+      },
+    });
+    client.activate();
+    stompRef.current = client;
+
+    return () => {
+      if (stompRef.current) {
+        stompRef.current.deactivate();
+      }
+    };
+  }, [activeRun?.id]);
+
+  // ── Handlers ─────────────────────────────────────────────────
   const handleChange = (e) => {
     const { name, value } = e.target;
     setFormData({
@@ -22,79 +186,408 @@ export default function TrainingLabPage() {
     });
   };
 
-  // 3. Submit to Spring Boot
-  const handleSubmit = async (e) => {
+  const handleHyperChange = (e) => {
+    const { name, value } = e.target;
+    setHyperparams({
+      ...hyperparams,
+      [name]: name === 'networkArch' ? value : parseFloat(value),
+    });
+  };
+
+  const handleCreateAndTrain = async (e) => {
     e.preventDefault();
     setStatus('Creating experiment...');
+
     try {
-      const result = await ExperimentService.createExperiment(formData);
-      setStatus(`Success! Experiment created with ID: ${result.experimentId}`);
+      // Step 1: Create experiment (topology config)
+      let expId = experimentId;
+      if (!expId) {
+        const result = await ExperimentService.createExperiment(formData);
+        expId = result.experimentId;
+        setExperimentId(expId);
+      }
+
+      // Step 2: Start training
+      setStatus('Starting training...');
+      const run = await TrainingService.startTraining(
+        expId,
+        hyperparams.totalTimesteps,
+        hyperparams.learningRate,
+        hyperparams.networkArch,
+      );
+      setActiveRun(run);
+      setRewardHistory([]);
+      setStatus(`Training started! Run #${run.id} queued.`);
+      loadTrainingRuns();
+
     } catch (error) {
       console.error(error);
-      setStatus('Failed to connect to backend. Is Spring Boot running?');
+      setStatus('Failed: ' + (error.response?.data?.message || error.message));
     }
   };
 
+  const handleStopTraining = async () => {
+    if (!activeRun) return;
+    try {
+      await TrainingService.stopTraining(activeRun.id);
+      setActiveRun(prev => ({ ...prev, status: 'CANCELLED' }));
+      setStatus('Training cancelled.');
+      loadTrainingRuns();
+    } catch (e) {
+      console.error(e);
+      setStatus('Failed to stop training.');
+    }
+  };
+
+  const isTraining = activeRun && (activeRun.status === 'TRAINING' || activeRun.status === 'QUEUED');
+  const progressPct = activeRun && activeRun.totalTimesteps > 0
+    ? Math.min(100, ((activeRun.currentTimestep || 0) / activeRun.totalTimesteps) * 100)
+    : 0;
+
   return (
-    <div className="max-w-2xl mx-auto">
-      <h1 className="text-3xl font-bold text-gray-900 mb-6">The Training Lab</h1>
-      
-      <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-200">
-        <h2 className="text-xl font-semibold mb-4">Topology Configuration</h2>
-        
-        <form onSubmit={handleSubmit} className="space-y-4">
-          
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Experiment Name</label>
-            <input type="text" name="name" value={formData.name} onChange={handleChange} 
-              className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-slate-500 focus:border-slate-500" />
-          </div>
+    <div style={{ maxWidth: '900px', margin: '0 auto', padding: '24px' }}>
+      <h1 style={{
+        fontSize: '2rem',
+        fontWeight: 'bold',
+        color: '#f1f5f9',
+        marginBottom: '24px',
+        background: 'linear-gradient(135deg, #22d3ee, #8b5cf6)',
+        WebkitBackgroundClip: 'text',
+        WebkitTextFillColor: 'transparent',
+      }}>
+        🧪 Training Lab
+      </h1>
 
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700">Bandwidth (Mbps)</label>
-              <input type="number" step="0.1" name="bottleneckBandwidthMbps" value={formData.bottleneckBandwidthMbps} onChange={handleChange} 
-                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm" />
+      {/* ── Section 1: Topology + Hyperparams ─────────────────── */}
+      <form onSubmit={handleCreateAndTrain}>
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr',
+          gap: '20px',
+          marginBottom: '20px',
+        }}>
+          {/* Left: Topology Config */}
+          <div style={{
+            background: '#1e293b',
+            borderRadius: '12px',
+            padding: '20px',
+            border: '1px solid #334155',
+          }}>
+            <h2 style={{ fontSize: '1.1rem', fontWeight: '600', color: '#e2e8f0', marginBottom: '16px' }}>
+              Network Topology
+            </h2>
+
+            <div style={{ marginBottom: '12px' }}>
+              <label style={labelStyle}>Experiment Name</label>
+              <input type="text" name="name" value={formData.name} onChange={handleChange}
+                style={inputStyle} />
             </div>
-            
-            <div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
               <div>
-  <label className="block text-sm font-medium text-gray-700">Base Delay (ms)</label>
-  <input type="number" step="1" name="baseDelayMs" value={formData.baseDelayMs} onChange={handleChange} 
-    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm" />
-  {/* The new helper text line: */}
-  <p className="mt-1 text-xs text-gray-500">Tip: Use 10ms for local networks, 100ms for long-distance.</p>
-</div>
-                
+                <label style={labelStyle}>Bandwidth (Mbps)</label>
+                <input type="number" step="0.1" name="bottleneckBandwidthMbps"
+                  value={formData.bottleneckBandwidthMbps} onChange={handleChange} style={inputStyle} />
+              </div>
+              <div>
+                <label style={labelStyle}>Base Delay (ms)</label>
+                <input type="number" step="1" name="baseDelayMs"
+                  value={formData.baseDelayMs} onChange={handleChange} style={inputStyle} />
+              </div>
+            </div>
+
+            <div>
+              <label style={labelStyle}>Queue Type</label>
+              <select name="queueType" value={formData.queueType} onChange={handleChange}
+                style={inputStyle}>
+                <option value="FqCoDel">FqCoDel</option>
+                <option value="DropTail">DropTail</option>
+                <option value="RED">RED</option>
+              </select>
             </div>
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Queue Type</label>
-            <select name="queueType" value={formData.queueType} onChange={handleChange}
-              className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm bg-white">
-              <option value="FqCoDel">FqCoDel</option>
-              <option value="DropTail">DropTail</option>
-              <option value="RED">RED</option>
-            </select>
+          {/* Right: Training Hyperparameters */}
+          <div style={{
+            background: '#1e293b',
+            borderRadius: '12px',
+            padding: '20px',
+            border: '1px solid #334155',
+          }}>
+            <h2 style={{ fontSize: '1.1rem', fontWeight: '600', color: '#e2e8f0', marginBottom: '16px' }}>
+              Training Hyperparameters
+            </h2>
+
+            <div style={{ marginBottom: '12px' }}>
+              <label style={labelStyle}>
+                Total Timesteps: <span style={{ color: '#22d3ee', fontWeight: 'bold' }}>
+                  {hyperparams.totalTimesteps.toLocaleString()}
+                </span>
+              </label>
+              <input type="range" name="totalTimesteps"
+                min="50000" max="2000000" step="50000"
+                value={hyperparams.totalTimesteps} onChange={handleHyperChange}
+                style={{ width: '100%', accentColor: '#22d3ee' }} />
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#64748b' }}>
+                <span>50K</span><span>500K</span><span>1M</span><span>2M</span>
+              </div>
+            </div>
+
+            <div style={{ marginBottom: '12px' }}>
+              <label style={labelStyle}>Learning Rate</label>
+              <select name="learningRate" value={hyperparams.learningRate} onChange={handleHyperChange}
+                style={inputStyle}>
+                <option value={1e-4}>1e-4 (Conservative)</option>
+                <option value={3e-4}>3e-4 (Default)</option>
+                <option value={1e-3}>1e-3 (Aggressive)</option>
+              </select>
+            </div>
+
+            <div>
+              <label style={labelStyle}>Network Architecture</label>
+              <select name="networkArch" value={hyperparams.networkArch} onChange={handleHyperChange}
+                style={inputStyle}>
+                <option value="128,128">Small [128, 128]</option>
+                <option value="256,256,128">Medium [256, 256, 128] (Default)</option>
+                <option value="512,256,128">Large [512, 256, 128]</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* Start Training Button */}
+        <button type="submit" disabled={isTraining}
+          style={{
+            width: '100%',
+            padding: '14px',
+            fontSize: '1rem',
+            fontWeight: 'bold',
+            border: 'none',
+            borderRadius: '10px',
+            cursor: isTraining ? 'not-allowed' : 'pointer',
+            background: isTraining
+              ? '#334155'
+              : 'linear-gradient(135deg, #22d3ee, #8b5cf6)',
+            color: '#fff',
+            transition: 'all 0.3s ease',
+            marginBottom: '12px',
+          }}>
+          {isTraining ? '⏳ Training in progress...' : '🚀 Start Training'}
+        </button>
+
+        {status && (
+          <div style={{
+            padding: '10px 14px',
+            borderRadius: '8px',
+            fontSize: '14px',
+            background: status.includes('Failed') ? '#451a2e' : '#0c4a4a',
+            color: status.includes('Failed') ? '#fca5a5' : '#5eead4',
+            border: `1px solid ${status.includes('Failed') ? '#7f1d1d' : '#134e4a'}`,
+          }}>
+            {status}
+          </div>
+        )}
+      </form>
+
+      {/* ── Section 2: Training Progress ──────────────────────── */}
+      {activeRun && (
+        <div style={{
+          background: '#1e293b',
+          borderRadius: '12px',
+          padding: '20px',
+          marginTop: '20px',
+          border: '1px solid #334155',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+            <h2 style={{ fontSize: '1.1rem', fontWeight: '600', color: '#e2e8f0' }}>
+              📊 Training Progress — Run #{activeRun.id}
+            </h2>
+            <div style={{
+              padding: '4px 12px',
+              borderRadius: '20px',
+              fontSize: '12px',
+              fontWeight: 'bold',
+              background: activeRun.status === 'COMPLETED' ? '#065f46' :
+                          activeRun.status === 'FAILED' ? '#7f1d1d' :
+                          activeRun.status === 'CANCELLED' ? '#78350f' : '#1e3a5f',
+              color: activeRun.status === 'COMPLETED' ? '#6ee7b7' :
+                     activeRun.status === 'FAILED' ? '#fca5a5' :
+                     activeRun.status === 'CANCELLED' ? '#fbbf24' : '#7dd3fc',
+            }}>
+              {activeRun.status}
+            </div>
           </div>
 
-          <div className="pt-4">
-            <button type="submit" 
-              className="w-full bg-slate-900 text-white font-semibold py-2 px-4 rounded-md hover:bg-slate-800 transition">
-              Create Environment
+          {/* Progress Bar */}
+          <div style={{ marginBottom: '16px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+              <span style={{ fontSize: '13px', color: '#94a3b8' }}>
+                Step {(activeRun.currentTimestep || 0).toLocaleString()} / {(activeRun.totalTimesteps || 0).toLocaleString()}
+              </span>
+              <span style={{ fontSize: '13px', color: '#22d3ee', fontWeight: 'bold' }}>
+                {progressPct.toFixed(1)}%
+              </span>
+            </div>
+            <div style={{
+              height: '8px',
+              borderRadius: '4px',
+              background: '#0f172a',
+              overflow: 'hidden',
+            }}>
+              <div style={{
+                height: '100%',
+                borderRadius: '4px',
+                width: `${progressPct}%`,
+                background: 'linear-gradient(90deg, #22d3ee, #8b5cf6)',
+                transition: 'width 0.5s ease',
+              }} />
+            </div>
+          </div>
+
+          {/* Stats Grid */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px', marginBottom: '16px' }}>
+            {[
+              { label: 'Episode', value: activeRun.currentEpisode || 0 },
+              { label: 'Avg Reward', value: (activeRun.latestAvgReward || 0).toFixed(4) },
+              { label: 'Learning Rate', value: activeRun.learningRate || '3e-4' },
+            ].map((stat, i) => (
+              <div key={i} style={{
+                background: '#0f172a',
+                borderRadius: '8px',
+                padding: '12px',
+                textAlign: 'center',
+              }}>
+                <div style={{ fontSize: '11px', color: '#64748b', marginBottom: '4px' }}>{stat.label}</div>
+                <div style={{ fontSize: '1.2rem', fontWeight: 'bold', color: '#e2e8f0' }}>{stat.value}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Reward Chart */}
+          <canvas
+            ref={canvasRef}
+            width={820}
+            height={250}
+            style={{ width: '100%', borderRadius: '8px' }}
+          />
+
+          {/* Stop Button */}
+          {isTraining && (
+            <button onClick={handleStopTraining}
+              style={{
+                width: '100%',
+                marginTop: '12px',
+                padding: '10px',
+                background: '#7f1d1d',
+                color: '#fca5a5',
+                border: '1px solid #991b1b',
+                borderRadius: '8px',
+                fontWeight: 'bold',
+                cursor: 'pointer',
+              }}>
+              🛑 Stop Training
             </button>
-          </div>
-          
-          {/* Status Message */}
-          {status && (
-            <div className={`mt-4 p-3 rounded text-sm ${status.includes('Success') ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
-              {status}
-            </div>
           )}
+        </div>
+      )}
 
-        </form>
-      </div>
+      {/* ── Section 3: Past Training Runs ─────────────────────── */}
+      {trainingRuns.length > 0 && (
+        <div style={{
+          background: '#1e293b',
+          borderRadius: '12px',
+          padding: '20px',
+          marginTop: '20px',
+          border: '1px solid #334155',
+        }}>
+          <h2 style={{ fontSize: '1.1rem', fontWeight: '600', color: '#e2e8f0', marginBottom: '16px' }}>
+            📋 Training History
+          </h2>
+
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr style={{ borderBottom: '1px solid #334155' }}>
+                {['Run', 'Steps', 'Episodes', 'Avg Reward', 'Status', 'Model'].map(h => (
+                  <th key={h} style={{
+                    padding: '8px 12px',
+                    textAlign: 'left',
+                    fontSize: '12px',
+                    color: '#64748b',
+                    fontWeight: '600',
+                  }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {trainingRuns.map(run => (
+                <tr key={run.id} style={{
+                  borderBottom: '1px solid #1e293b',
+                  cursor: 'pointer',
+                  transition: 'background 0.2s',
+                }}
+                  onMouseOver={(e) => e.currentTarget.style.background = '#0f172a'}
+                  onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
+                  onClick={() => {
+                    setActiveRun(run);
+                    setRewardHistory([]);
+                  }}
+                >
+                  <td style={cellStyle}>#{run.id}</td>
+                  <td style={cellStyle}>{(run.currentTimestep || 0).toLocaleString()} / {(run.totalTimesteps || 0).toLocaleString()}</td>
+                  <td style={cellStyle}>{run.currentEpisode || 0}</td>
+                  <td style={cellStyle}>{(run.latestAvgReward || 0).toFixed(4)}</td>
+                  <td style={cellStyle}>
+                    <span style={{
+                      padding: '2px 8px',
+                      borderRadius: '12px',
+                      fontSize: '11px',
+                      fontWeight: 'bold',
+                      background: run.status === 'COMPLETED' ? '#065f46' :
+                                  run.status === 'FAILED' ? '#7f1d1d' :
+                                  run.status === 'TRAINING' ? '#1e3a5f' :
+                                  run.status === 'QUEUED' ? '#78350f' : '#334155',
+                      color: run.status === 'COMPLETED' ? '#6ee7b7' :
+                             run.status === 'FAILED' ? '#fca5a5' :
+                             run.status === 'TRAINING' ? '#7dd3fc' :
+                             run.status === 'QUEUED' ? '#fbbf24' : '#94a3b8',
+                    }}>
+                      {run.status}
+                    </span>
+                  </td>
+                  <td style={cellStyle}>{run.modelFileName || '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
+
+// ── Shared Styles ─────────────────────────────────────────────
+const labelStyle = {
+  display: 'block',
+  fontSize: '13px',
+  fontWeight: '500',
+  color: '#94a3b8',
+  marginBottom: '4px',
+};
+
+const inputStyle = {
+  width: '100%',
+  padding: '8px 12px',
+  borderRadius: '8px',
+  border: '1px solid #334155',
+  background: '#0f172a',
+  color: '#e2e8f0',
+  fontSize: '14px',
+  outline: 'none',
+  boxSizing: 'border-box',
+};
+
+const cellStyle = {
+  padding: '10px 12px',
+  fontSize: '13px',
+  color: '#cbd5e1',
+};

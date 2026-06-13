@@ -21,8 +21,8 @@ services:
 
   ns3-sim:
     build:
-      context: .
-      dockerfile: ns3_files/Dockerfile
+      context: ./ns3_files
+      dockerfile: Dockerfile
     ports:
       - "8000:8000" # Maps the new Python Sidecar Manager API
     networks:

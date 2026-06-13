@@ -116,3 +116,50 @@ export const FlowService = {
         return response.data;
     }
 };
+
+// ─── Training Service ───────────────────────────────────────────
+export const TrainingService = {
+    // POST /api/training/start
+    startTraining: async (experimentId, totalTimesteps, learningRate, networkArch) => {
+        const response = await apiClient.post('/training/start', {
+            experimentId,
+            totalTimesteps,
+            learningRate: learningRate || 3e-4,
+            networkArch: networkArch || '256,256,128',
+        });
+        return response.data;
+    },
+
+    // POST /api/training/{id}/stop
+    stopTraining: async (trainingRunId) => {
+        const response = await apiClient.post(`/training/${trainingRunId}/stop`);
+        return response.data;
+    },
+
+    // GET /api/training/runs
+    getTrainingRuns: async () => {
+        const response = await apiClient.get('/training/runs');
+        return response.data;
+    },
+
+    // GET /api/training/{id}/status
+    getTrainingStatus: async (trainingRunId) => {
+        const response = await apiClient.get(`/training/${trainingRunId}/status`);
+        return response.data;
+    },
+};
+
+// ─── Model Service ──────────────────────────────────────────────
+export const ModelService = {
+    // GET /api/models/all
+    getAllModels: async () => {
+        const response = await apiClient.get('/models/all');
+        return response.data;
+    },
+
+    // GET /api/models/experiment/{experimentId}
+    getModelsForExperiment: async (experimentId) => {
+        const response = await apiClient.get(`/models/experiment/${experimentId}`);
+        return response.data;
+    },
+};

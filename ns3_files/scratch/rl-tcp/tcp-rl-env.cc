@@ -90,14 +90,11 @@ TcpTimeStepEnv::TcpTimeStepEnv (uint16_t id) : TcpRlEnv (id)
 void
 TcpTimeStepEnv::ScheduleNextStateRead ()
 {
-  NS_LOG_UNCOND ("[TcpTimeStepEnv] ScheduleNextStateRead called at " << Simulator::Now ().GetSeconds () << "s");
   // Reschedule UNCONDITIONALLY first — keeps simulation alive even when TCP idle
   Simulator::Schedule (m_timeStep, &TcpTimeStepEnv::ScheduleNextStateRead, this);
 
-  if (m_tcb == nullptr) {
-    NS_LOG_UNCOND ("[TcpTimeStepEnv] m_tcb is null, skipping this step");
+  if (m_tcb == nullptr)
     return;
-  }
 
   // ── Compute raw per-step values ──────────────────────────────────────────
 
@@ -156,13 +153,10 @@ TcpTimeStepEnv::ScheduleNextStateRead ()
 
   env->packetLoss = m_packetLossCount;
 
-  NS_LOG_UNCOND ("[TcpTimeStepEnv] Calling SetCompleted() -> Python can read");
   SetCompleted ();   // Release — Python can now read
-  NS_LOG_UNCOND ("[TcpTimeStepEnv] SetCompleted() returned. Calling ActionGetterCond() -> Waiting for Python to write");
 
   // ── Read action from shared memory ───────────────────────────────────────
   auto act = ActionGetterCond ();
-  NS_LOG_UNCOND ("[TcpTimeStepEnv] ActionGetterCond() returned! Python wrote action");
 
   uint32_t segSize = m_tcb->m_segmentSize;
   if (segSize == 0) segSize = 340;

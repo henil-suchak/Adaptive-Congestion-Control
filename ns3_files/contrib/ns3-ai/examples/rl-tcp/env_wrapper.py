@@ -24,6 +24,7 @@ import gymnasium as gym
 from gymnasium.spaces import Box
 from numpy import inf
 
+import ctypes
 from py_interface import Ns3AIRL, Experiment, Reset
 
 
@@ -64,7 +65,7 @@ SHM_KEY         = 1234
 SHM_SIZE        = 1048576       # 1 MB
 DEFAULT_STEPS   = 2000          # Sane default; override via max_steps
 QUEUE_TIMEOUT   = 15            # seconds — ns-3 10ms steps should never take longer
-NS3_PATH        = '../../../../'
+NS3_PATH        = '/sim/ns-allinone-3.35/ns-3.35'
 
 # ── Observation normalization maximums ───────────────────────────────────────
 # Each value is the realistic maximum for that field in this simulation.
@@ -151,12 +152,18 @@ class Ns3TcpEnv(gym.Env):
         self._episode += 1
         self._episode_step = 0
 
+        print(f"[Env] reset() called for episode {self._episode}", flush=True)
+
         # 1. Stop any running background thread
+        print("[Env] Step 1: Stopping background thread...", flush=True)
         self._stop_background_thread()
+        print("[Env] Step 1: Done.", flush=True)
 
         # 2. Kill ns-3 process
+        print("[Env] Step 2: Killing ns-3...", flush=True)
         self._exp.kill()
         time.sleep(0.5)   # give ns-3 time to fully exit on macOS
+        print("[Env] Step 2: Done.", flush=True)
 
         # 3. Clear stale queue data from previous episode
         self._drain_queue(self._obs_queue)
@@ -165,12 +172,16 @@ class Ns3TcpEnv(gym.Env):
         # 4. Reset shared memory data region (preserves control blocks)
         Reset()
 
-        # 4b. CRITICAL FIX: Write safe default action directly into shared
-        # memory BEFORE ns-3 starts. This prevents ns-3 from reading a stale
-        # new_cWnd from the previous episode on its very first IncreaseWindow()
-        # call, which caused cWnd=83292 garbage values at Step 100.
+        # 4b. Reset SHM version counter to 0 for clean episode start.
+        # The SharedMemoryLockable header (version, nextVersion) sits
+        # 2 bytes before the data pointer returned by RegisterMemory.
         if self._var is not None:
             try:
+                addr = ctypes.addressof(self._var.m_obj)
+                ctypes.c_uint8.from_address(addr - 2).value = 0  # version
+                ctypes.c_uint8.from_address(addr - 1).value = 0  # nextVersion
+                self._var.finished = False
+                self._var.m_obj.isFinish = False
                 self._var.m_obj.act.new_cWnd     = 3400
                 self._var.m_obj.act.new_ssThresh = 65535
             except Exception:
@@ -185,8 +196,10 @@ class Ns3TcpEnv(gym.Env):
             'data':           10000,   # 10,000 MB ≈ unlimited for any sim_duration
                                        # data=0 means 0 MB (send nothing!) — NOT unlimited
         }
+        print("[Env] Step 5: Starting new ns-3...", flush=True)
         self._exp.run(setting=setting, show_output=True)
         time.sleep(2.0)   # increased: give ns-3 more time to init on macOS ARM64
+        print("[Env] Step 5: Done.", flush=True)
 
         # 6. Register shared memory on first episode only
         if self._var is None:
@@ -198,8 +211,10 @@ class Ns3TcpEnv(gym.Env):
             target=self._ns3_loop, daemon=True, name='ns3-sync'
         )
         self._loop_thread.start()
+        print("[Env] Step 7: Sync thread launched.", flush=True)
 
         # 8. Get first observation and send a default action back
+        print("[Env] Step 8: Waiting for first obs...", flush=True)
         try:
             obs_dict = self._obs_queue.get(timeout=QUEUE_TIMEOUT)
         except queue.Empty:
@@ -288,25 +303,33 @@ class Ns3TcpEnv(gym.Env):
         """
         Background thread: syncs with ns-3 via shared memory.
 
-        CRITICAL FIX — Two-phase lock pattern:
-            Phase 1: Acquire lock → read observation → RELEASE lock
-            Phase 2: Wait for action from RL agent (NO lock held)
-            Phase 3: Acquire lock → write action → release lock
+        Single-phase lock pattern (matching the ns3-ai SHM protocol):
+            1. Acquire lock (Python acquires when version is odd)
+            2. Read observation from shared memory
+            3. Write action to shared memory
+            4. Release lock (increments version to even → C++ can acquire)
 
-        Previously the lock was held across the action wait, causing
-        ns-3 to block indefinitely (hang at Step 500 on macOS ARM64).
+        The action written is from the PREVIOUS step's decision. On the
+        first step we write a safe default action. This pipelining avoids
+        holding the SHM lock while waiting for the RL agent.
         """
-        print("[SyncThread] Started.")
+        print("[SyncThread] Started.", flush=True)
+
+        # Pre-computed action for the NEXT SHM write (pipelining)
+        pending_action = {
+            'new_cWnd':     3400,    # safe default: ~10 segments
+            'new_ssThresh': 65535,
+        }
 
         while not self._stop_event.is_set():
             try:
-                # ── PHASE 1: Read observation (lock held briefly) ──────────
+                # ── Single-phase: read obs + write action in one lock hold ──
                 with self._var as data:
                     if data is None:
-                        # isFinish flag set — simulation ended
                         print("[SyncThread] ns-3 signalled finish.")
                         break
 
+                    # Read observation
                     obs_dict = {
                         'nodeId':        data.env.nodeId,
                         'socketUid':     data.env.socketUid,
@@ -322,37 +345,32 @@ class Ns3TcpEnv(gym.Env):
                         'packetLoss':    data.env.packetLoss,
                     }
 
-                    # ── Sanitize ALL fields — clamp to realistic maximums ────
-                    # Multiplier 1000 → max cWnd = 1000 × segSize = 1.4MB.
-                    # Previously 100000 let garbage values like 6.8MB through.
+                    # Sanitize fields
                     seg = max(obs_dict['segmentSize'], 340)
-
-                    # cWnd: must be [1 seg, 1000 segs]
                     if obs_dict['cWnd'] == 0 or obs_dict['cWnd'] > seg * 1000:
                         obs_dict['cWnd'] = seg
-
-                    # ssThresh: must be [1 seg, 2000 segs]
                     if obs_dict['ssThresh'] == 0 or obs_dict['ssThresh'] > seg * 2000:
                         obs_dict['ssThresh'] = seg * 100
-
-                    # rtt_us: must be [0, 500ms]
                     if obs_dict['rtt_us'] < 0 or obs_dict['rtt_us'] > 500_000:
                         obs_dict['rtt_us'] = 0
-
-                    # throughput: must be [0, 10× bottleneck = 2.5MB/s]
                     if obs_dict['throughput'] < 0 or obs_dict['throughput'] > 2_500_000:
                         obs_dict['throughput'] = 0.0
-
-                    # bytesInFlight: must be [0, 1000 segs]
                     if obs_dict['bytesInFlight'] > seg * 1000:
                         obs_dict['bytesInFlight'] = 0
-
-                    # packetLoss: must be [0, 1000]
                     if obs_dict['packetLoss'] > 1000:
                         obs_dict['packetLoss'] = 0
-                # Lock released here — ns-3 can proceed
 
-                # ── PHASE 2: Pass obs to main thread, wait for action ──────
+                    # Write the pending action (from previous step or default)
+                    seg_size  = max(obs_dict.get('segmentSize', 340), 340)
+                    MAX_CWND  = seg_size * 1000
+                    MIN_CWND  = seg_size
+                    safe_cWnd     = int(np.clip(pending_action['new_cWnd'],     MIN_CWND, MAX_CWND))
+                    safe_ssThresh = int(np.clip(pending_action['new_ssThresh'], MIN_CWND, MAX_CWND * 2))
+                    data.act.new_cWnd     = safe_cWnd
+                    data.act.new_ssThresh = safe_ssThresh
+                # Lock released — C++ reads action and advances
+
+                # Pass obs to main thread
                 try:
                     self._obs_queue.put(obs_dict, timeout=QUEUE_TIMEOUT)
                 except queue.Full:
@@ -360,41 +378,24 @@ class Ns3TcpEnv(gym.Env):
                         break
                     continue
 
+                # Wait for RL agent's action (will be written on NEXT SHM cycle)
                 try:
-                    action = self._act_queue.get(timeout=QUEUE_TIMEOUT)
+                    pending_action = self._act_queue.get(timeout=QUEUE_TIMEOUT)
                 except queue.Empty:
                     if self._stop_event.is_set():
                         break
-                    print("[SyncThread] WARNING: Timed out waiting for action.")
-                    action = {
-                        'new_cWnd':      obs_dict['cWnd'],   # keep current
+                    print("[SyncThread] WARNING: Timed out waiting for action.", flush=True)
+                    pending_action = {
+                        'new_cWnd':      obs_dict['cWnd'],
                         'new_ssThresh':  obs_dict['ssThresh'],
                     }
 
-                # ── PHASE 3: Write action back to shared memory ────────────
-                with self._var as data:
-                    if data is None:
-                        break
-                    # FIX 3: Tighten cWnd cap to 200 segments max (~68KB).
-                    # Bottleneck is 2Mbps — 200 segments is more than enough.
-                    # Previously 10000 segments allowed cWnd=42566 spikes.
-                    seg_size  = max(obs_dict.get('segmentSize', 340), 340)
-                    MAX_CWND  = seg_size * 1000   # 1000 segments max — consistent with step()
-                    MIN_CWND  = seg_size
-
-                    safe_cWnd     = int(np.clip(action['new_cWnd'],     MIN_CWND, MAX_CWND))
-                    safe_ssThresh = int(np.clip(action['new_ssThresh'],  MIN_CWND, MAX_CWND * 2))
-
-                    data.act.new_cWnd     = safe_cWnd
-                    data.act.new_ssThresh = safe_ssThresh
-                # Lock released — ns-3 reads action and advances
-
             except Exception as e:
                 if not self._stop_event.is_set():
-                    print(f"[SyncThread] Exception: {e}")
+                    print(f"[SyncThread] Exception: {e}", flush=True)
                 break
 
-        print("[SyncThread] Exited.")
+        print("[SyncThread] Exited.", flush=True)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -450,6 +451,24 @@ class Ns3TcpEnv(gym.Env):
     def _stop_background_thread(self):
         if self._loop_thread and self._loop_thread.is_alive():
             self._stop_event.set()
+
+            # CRITICAL: Unblock the C-level AcquireMemoryCond spin-wait.
+            # The sync thread may be stuck in AcquireMemoryCond (C-level)
+            # waiting for version%2==1. We cannot use IncMemoryVersion()
+            # because it uses CAS which deadlocks if the lock is held.
+            # Instead, directly write to the SHM header via ctypes:
+            #   - Set isFinish=True so Acquire() returns None
+            #   - Set version=1 so AcquireMemoryCond(mod=2,res=1) unblocks
+            #   - Set nextVersion=1 so the CAS succeeds
+            if self._var is not None:
+                try:
+                    self._var.m_obj.isFinish = True
+                    addr = ctypes.addressof(self._var.m_obj)
+                    ctypes.c_uint8.from_address(addr - 2).value = 1  # version=1 (odd)
+                    ctypes.c_uint8.from_address(addr - 1).value = 1  # nextVersion=1
+                except Exception:
+                    pass
+
             # Unblock queues so thread can exit
             self._drain_queue(self._obs_queue)
             try:
@@ -458,7 +477,7 @@ class Ns3TcpEnv(gym.Env):
                 pass
             self._loop_thread.join(timeout=5.0)
             if self._loop_thread.is_alive():
-                print("[Env] WARNING: Sync thread did not exit cleanly.")
+                print("[Env] WARNING: Sync thread did not exit cleanly.", flush=True)
         self._stop_event.clear()
 
     @staticmethod

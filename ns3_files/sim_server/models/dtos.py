@@ -7,3 +7,10 @@ class SimulationRequest(BaseModel):
     delayMs: float
     simDuration: int
     modelName: str
+
+class TrainingRequest(BaseModel):
+    trainingRunId: int
+    experimentId: int
+    totalTimesteps: int
+    learningRate: float = 3e-4
+    networkArch: str = "256,256,128"

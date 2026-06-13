@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Client } from '@stomp/stompjs';
 import SockJS from 'sockjs-client';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
-import { ExperimentService } from '../services/api';
+import { ExperimentService, ModelService } from '../services/api';
 
 export default function InferenceArenaPage() {
   // 1. React State
@@ -11,6 +11,7 @@ export default function InferenceArenaPage() {
   const [selectedModel, setSelectedModel] = useState('sac_tcp_1500000_steps.zip'); 
   const [targetExperimentId, setTargetExperimentId] = useState(''); 
   const [availableExperiments, setAvailableExperiments] = useState([]);
+  const [trainedModels, setTrainedModels] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [experimentStatus, setExperimentStatus] = useState(null);
   const [queuePosition, setQueuePosition] = useState(0);
@@ -37,6 +38,19 @@ export default function InferenceArenaPage() {
       }
     };
     fetchExperiments();
+  }, []);
+
+  // 2b. Fetch trained models from backend
+  useEffect(() => {
+    const fetchModels = async () => {
+      try {
+        const models = await ModelService.getAllModels();
+        setTrainedModels(models);
+      } catch (e) {
+        console.error('Failed to load trained models:', e);
+      }
+    };
+    fetchModels();
   }, []);
 
   // 3. Poll experiment status when QUEUED or RUNNING
@@ -246,21 +260,26 @@ export default function InferenceArenaPage() {
             </select>
           </div>
 
-          {/* THE MODEL SELECTOR */}
+          {/* THE MODEL SELECTOR — Dynamic from backend */}
           <select 
             value={selectedModel} 
             onChange={(e) => setSelectedModel(e.target.value)}
             className="bg-slate-800 text-white border border-slate-700 rounded-md py-2 px-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
-          <optgroup label="My Trained Models">
-              {/* 🟢 ADD YOUR EXACT FILE HERE */}
-              <option value="sac_tcp_1500000_steps.zip">My 1.5M Step SAC Model</option>
-            </optgroup>
+            {trainedModels.length > 0 && (
+              <optgroup label="My Trained Models">
+                {trainedModels.map((m) => (
+                  <option key={m.id} value={m.checkpointName}>
+                    {m.checkpointName} ({(m.totalSteps || 0).toLocaleString()} steps)
+                  </option>
+                ))}
+              </optgroup>
+            )}
             <optgroup label="Platform Defaults">
+              <option value="sac_tcp_1500000_steps.zip">SAC 1.5M Steps (Pre-trained)</option>
               <option value="sac_baseline_v1">SAC Baseline (Balanced)</option>
               <option value="sac_high_throughput">SAC (High Throughput)</option>
             </optgroup>
-            
           </select>
 
           {/* START BUTTON */}

@@ -67,12 +67,21 @@ class TcpLogCallback(BaseCallback):
 
 def main():
     args = parse_args()
-    steps_per_episode = args.sim_duration * 25
+    # FIX: Make sim_duration long enough that ALL timesteps fit in ONE episode.
+    # This avoids inter-episode resets which deadlock on the SHM protocol.
+    # Each 10ms sim step = 1 RL step → need sim_duration >= timesteps * 0.01 / 0.4
+    # Using factor of 25: steps_per_episode = sim_duration * 25
+    min_sim_duration = (args.timesteps // 25) + 100   # +100s buffer
+    sim_duration = max(args.sim_duration, min_sim_duration)
+    steps_per_episode = sim_duration * 25
     os.makedirs(args.save_path, exist_ok=True)
+
+    print(f"[Config] sim_duration={sim_duration}s  steps_per_episode={steps_per_episode:,}  "
+          f"total_timesteps={args.timesteps:,}")
 
     env = Ns3TcpEnv(
         shm_key=args.shm_key, shm_size=1_048_576,
-        max_steps=steps_per_episode, sim_duration=args.sim_duration,
+        max_steps=steps_per_episode, sim_duration=sim_duration,
     )
 
     if args.resume and os.path.exists(args.resume):

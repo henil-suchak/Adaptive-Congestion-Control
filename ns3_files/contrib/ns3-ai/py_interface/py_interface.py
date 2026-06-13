@@ -127,12 +127,30 @@ class Experiment:
 
     def _build_command(self, setting):
         ns3_root = self.path
-        binary = os.path.join(
-            ns3_root, 'build', 'scratch',
-            'rl-tcp-inference', 'rl-tcp-inference'
-        )
-        if not os.path.exists(binary):
-            raise FileNotFoundError(f"Cannot find ns-3 binary: {binary}")
+        prog = self.programName
+
+        # Search for the binary in multiple possible locations:
+        #   1. scratch/{prog}/{prog}          — for scratch modules (inference)
+        #   2. contrib/ns3-ai/examples/{prog}/{prog} — for training examples
+        #   3. examples/ns3-ai/{prog}/{prog}  — alternate example path
+        candidates = [
+            os.path.join(ns3_root, 'build', 'scratch', prog, prog),
+            os.path.join(ns3_root, 'build', 'contrib', 'ns3-ai', 'examples', prog, prog),
+            os.path.join(ns3_root, 'build', 'examples', prog, prog),
+        ]
+
+        binary = None
+        for path in candidates:
+            if os.path.exists(path):
+                binary = path
+                break
+
+        if binary is None:
+            raise FileNotFoundError(
+                f"Cannot find ns-3 binary '{prog}' in any of:\n"
+                + "\n".join(f"  - {c}" for c in candidates)
+            )
+
         cmd = [binary]
         if setting:
             for k, v in setting.items():

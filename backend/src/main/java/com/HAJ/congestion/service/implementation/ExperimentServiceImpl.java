@@ -21,21 +21,25 @@ public class ExperimentServiceImpl implements ExperimentService {
     private final TelemetrySimulator telemetrySimulator;
     private final RestTemplate restTemplate;
     private final SimulationQueueService simulationQueueService;
+    private final com.HAJ.congestion.security.SecurityUtils securityUtils;
 
     public ExperimentServiceImpl(ExperimentRepository experimentRepository,
                                  TelemetrySimulator telemetrySimulator,
                                  RestTemplate restTemplate,
-                                 SimulationQueueService simulationQueueService) {
+                                 SimulationQueueService simulationQueueService,
+                                 com.HAJ.congestion.security.SecurityUtils securityUtils) {
         this.experimentRepository = experimentRepository;
         this.telemetrySimulator = telemetrySimulator;
         this.restTemplate = restTemplate;
         this.simulationQueueService = simulationQueueService;
+        this.securityUtils = securityUtils;
     }
 
     @Override
     @CacheEvict(value = "experiments", allEntries = true)
     public Experiment createExperiment(String Name, String Topology, Double bottleneckBandwidthMbps, Double baseDelayMs, String queueType) {
         Experiment experiment = new Experiment(Name, Topology, bottleneckBandwidthMbps, baseDelayMs, queueType, ExperimentStatus.CREATED);
+        experiment.setUserId(securityUtils.getCurrentUserId());
         return experimentRepository.save(experiment);
     }
 
@@ -44,6 +48,10 @@ public class ExperimentServiceImpl implements ExperimentService {
     public void startExperiment(Long experimentId, String modelName) {
         Experiment experiment = experimentRepository.findById(experimentId)
                 .orElseThrow(() -> new RuntimeException("Experiment not found"));
+
+        if (experiment.getUserId() != null && !experiment.getUserId().equals(securityUtils.getCurrentUserId())) {
+            throw new RuntimeException("Access Denied: You do not own this experiment");
+        }
 
         if (experiment.getStatus() == ExperimentStatus.RUNNING) {
             System.out.println("[StartExperiment] Experiment " + experimentId + " is RUNNING — auto-stopping first...");
@@ -69,9 +77,8 @@ public class ExperimentServiceImpl implements ExperimentService {
     }
 
     @Override
-    @Cacheable("experiments")
     public List<Experiment> getAllExperiment(){
-        return experimentRepository.findAll();
+        return experimentRepository.findByUserIdOrUserIdIsNull(securityUtils.getCurrentUserId());
     }
 
     @Override
@@ -80,9 +87,12 @@ public class ExperimentServiceImpl implements ExperimentService {
         Experiment experiment = experimentRepository.findById(experimentId)
                 .orElseThrow(() -> new RuntimeException("Experiment not found"));
 
+        if (experiment.getUserId() != null && !experiment.getUserId().equals(securityUtils.getCurrentUserId())) {
+            throw new RuntimeException("Access Denied: You do not own this experiment");
+        }
+
         if (experiment.getStatus() == ExperimentStatus.COMPLETED) {
-            System.out.println("[EndExperiment] Experiment " + experimentId + " is already COMPLETED — skipping.");
-            return;
+            System.out.println("[EndExperiment] Experiment " + experimentId + " is already COMPLETED in DB, but we will send a kill signal anyway just in case.");
         }
 
         System.out.println("==================================================");
@@ -101,8 +111,12 @@ public class ExperimentServiceImpl implements ExperimentService {
 
     @Override
     public Experiment getExperimentById(Long experimentId) {
-        return experimentRepository.findById(experimentId)
+        Experiment experiment = experimentRepository.findById(experimentId)
                 .orElseThrow(() -> new RuntimeException("Experiment not found"));
+        if (experiment.getUserId() != null && !experiment.getUserId().equals(securityUtils.getCurrentUserId())) {
+            throw new RuntimeException("Access Denied: You do not own this experiment");
+        }
+        return experiment;
     }
 
     @Override
