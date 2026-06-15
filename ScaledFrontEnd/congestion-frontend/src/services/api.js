@@ -120,12 +120,13 @@ export const FlowService = {
 // ─── Training Service ───────────────────────────────────────────
 export const TrainingService = {
     // POST /api/training/start
-    startTraining: async (experimentId, totalTimesteps, learningRate, networkArch) => {
+    startTraining: async (experimentId, totalTimesteps, learningRate, networkArch, rewardProfile) => {
         const response = await apiClient.post('/training/start', {
             experimentId,
             totalTimesteps,
-            learningRate: learningRate || 3e-4,
-            networkArch: networkArch || '256,256,128',
+            learningRate: learningRate || 1e-4,
+            networkArch: networkArch || '256,256',
+            rewardProfile: rewardProfile || 'BALANCED',
         });
         return response.data;
     },

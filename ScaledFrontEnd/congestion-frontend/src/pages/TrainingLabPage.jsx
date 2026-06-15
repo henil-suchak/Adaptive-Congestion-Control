@@ -15,8 +15,9 @@ export default function TrainingLabPage() {
   // ── Training Hyperparameters ─────────────────────────────────
   const [hyperparams, setHyperparams] = useState({
     totalTimesteps: 500000,
-    learningRate: 3e-4,
-    networkArch: '256,256,128',
+    learningRate: 1e-4,
+    networkArch: '256,256',
+    rewardProfile: 'BALANCED',
   });
 
   // ── State ────────────────────────────────────────────────────
@@ -196,7 +197,7 @@ export default function TrainingLabPage() {
     const { name, value } = e.target;
     setHyperparams({
       ...hyperparams,
-      [name]: name === 'networkArch' ? value : parseFloat(value),
+      [name]: (name === 'networkArch' || name === 'rewardProfile') ? value : parseFloat(value),
     });
   };
 
@@ -230,6 +231,7 @@ export default function TrainingLabPage() {
         hyperparams.totalTimesteps,
         hyperparams.learningRate,
         hyperparams.networkArch,
+        hyperparams.rewardProfile,
       );
       setActiveRun(run);
       setRewardHistory([]);
@@ -340,19 +342,29 @@ export default function TrainingLabPage() {
               <label style={labelStyle}>Learning Rate</label>
               <select name="learningRate" value={hyperparams.learningRate} onChange={handleHyperChange}
                 style={inputStyle}>
-                <option value={1e-4}>1e-4 (Conservative)</option>
-                <option value={3e-4}>3e-4 (Default)</option>
+                <option value={1e-4}>1e-4 (Expert Default)</option>
+                <option value={3e-4}>3e-4 (Legacy)</option>
                 <option value={1e-3}>1e-3 (Aggressive)</option>
               </select>
             </div>
 
-            <div>
+            <div style={{ marginBottom: '12px' }}>
               <label style={labelStyle}>Network Architecture</label>
               <select name="networkArch" value={hyperparams.networkArch} onChange={handleHyperChange}
                 style={inputStyle}>
                 <option value="128,128">Small [128, 128]</option>
-                <option value="256,256,128">Medium [256, 256, 128] (Default)</option>
-                <option value="512,256,128">Large [512, 256, 128]</option>
+                <option value="256,256">Medium [256, 256] (Expert Default)</option>
+                <option value="256,256,128">Deep [256, 256, 128] (Legacy)</option>
+              </select>
+            </div>
+
+            <div>
+              <label style={labelStyle}>RL Personality (Reward Profile)</label>
+              <select name="rewardProfile" value={hyperparams.rewardProfile} onChange={handleHyperChange}
+                style={inputStyle}>
+                <option value="BALANCED">Balanced (Safe Throughput)</option>
+                <option value="AGGRESSIVE">Aggressive (Max Throughput, Ignore Bufferbloat)</option>
+                <option value="CALM">Calm (Zero Bufferbloat, Lower Throughput)</option>
               </select>
             </div>
           </div>

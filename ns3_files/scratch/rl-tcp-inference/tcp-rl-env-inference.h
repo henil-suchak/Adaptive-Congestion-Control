@@ -6,58 +6,81 @@
 #include "ns3/tcp-socket-state.h"
 #include "ns3/tcp-header.h"
 #include "ns3/nstime.h"
+#include <vector>
 
 namespace ns3 {
 
-  // 🟢 ADD THIS LINE TO DISABLE PADDING
+#define MAX_AGENTS 10
+
 #pragma pack(push, 1)
 struct sTcpRlInferenceEnv
 {
-  uint32_t nodeId;
-  uint32_t socketUid;
-  uint8_t  envType;
+  uint16_t numAgents;
+  uint32_t nodeId[MAX_AGENTS];
+  uint32_t socketUid[MAX_AGENTS];
+  uint8_t  envType[MAX_AGENTS];
   int64_t  simTime_us;
-  uint32_t ssThresh;
-  uint32_t cWnd;
-  uint32_t segmentSize;
-  uint32_t segmentsAcked;
-  uint32_t bytesInFlight;
-  int64_t  rtt_us;
-  double   throughput;
-  uint32_t packetLoss;
+  uint32_t ssThresh[MAX_AGENTS];
+  uint32_t cWnd[MAX_AGENTS];
+  uint32_t segmentSize[MAX_AGENTS];
+  uint32_t segmentsAcked[MAX_AGENTS];
+  uint32_t bytesInFlight[MAX_AGENTS];
+  int64_t  rtt_us[MAX_AGENTS];
+  double   throughput[MAX_AGENTS];
+  uint32_t packetLoss[MAX_AGENTS];
 };
 
 struct TcpRlInferenceAct
 {
-  uint32_t new_ssThresh;
-  uint32_t new_cWnd;
+  uint32_t new_ssThresh[MAX_AGENTS];
+  uint32_t new_cWnd[MAX_AGENTS];
+};
+#pragma pack(pop)
+
+class TcpRlInferenceEnv;
+
+// Central controller to aggregate states into a single SHM block for Python
+class TcpRlInferenceCentralController : public Ns3AIRL<sTcpRlInferenceEnv, TcpRlInferenceAct>
+{
+public:
+  static TcpRlInferenceCentralController& Get();
+
+  void Register (TcpRlInferenceEnv* env);
+  void Unregister (TcpRlInferenceEnv* env);
+
+private:
+  TcpRlInferenceCentralController(uint16_t id);
+  void ScheduleNextStep ();
+  void SendObsGetAction ();
+
+  std::vector<TcpRlInferenceEnv*> m_agents;
+  bool m_started{false};
+  Time m_timeStep{MilliSeconds (10)};
 };
 
-// 🟢 ADD THIS LINE TO RESTORE NORMAL PADDING FOR THE REST OF NS-3
-#pragma pack(pop)
-// Uses default SimInfoType = RLEmptyInfo (1 byte) → C++ total = 67 bytes.
-// Python must also use 1 byte (_pad = c_uint8) to match.
-class TcpRlInferenceEnv : public Ns3AIRL<sTcpRlInferenceEnv, TcpRlInferenceAct>
+class TcpRlInferenceEnv : public SimpleRefCount<TcpRlInferenceEnv>
 {
 public:
   TcpRlInferenceEnv () = delete;
   explicit TcpRlInferenceEnv (uint16_t id);
+  ~TcpRlInferenceEnv ();
 
   void SetNodeId (uint32_t id);
   void SetSocketUuid (uint32_t id);
 
-  // Packet trace callbacks (throughput measurement)
   void TxPktTrace (Ptr<const Packet>, const TcpHeader &, Ptr<const TcpSocketBase>);
   void RxPktTrace (Ptr<const Packet>, const TcpHeader &, Ptr<const TcpSocketBase>);
 
-  // TcpCongestionOps hooks — ns3 calls these on every ACK.
-  // Direct read/write access to tcb->m_cWnd and tcb->m_ssThresh.
   uint32_t GetSsThresh    (Ptr<const TcpSocketState> tcb, uint32_t bytesInFlight);
   void     IncreaseWindow (Ptr<TcpSocketState> tcb, uint32_t segmentsAcked);
   void     PktsAcked      (Ptr<TcpSocketState> tcb, uint32_t segmentsAcked, const Time &rtt);
-  void     CongestionStateSet (Ptr<TcpSocketState> tcb,
-                               const TcpSocketState::TcpCongState_t newState);
+  void     CongestionStateSet (Ptr<TcpSocketState> tcb, const TcpSocketState::TcpCongState_t newState);
   void     CwndEvent      (Ptr<TcpSocketState> tcb, const TcpSocketState::TcpCAEvent_t event);
+
+  // Called by Central Controller
+  void FillEnvData (sTcpRlInferenceEnv* envData, size_t index);
+  void ApplyAction (TcpRlInferenceAct* actData, size_t index);
+  void FirstStart ();
 
 protected:
   uint32_t m_nodeId      {0};
@@ -65,24 +88,22 @@ protected:
   uint32_t m_new_ssThresh{65535};
   uint32_t m_new_cWnd    {3400};
 
-  uint64_t m_txBytes       {0};   // bytes sent this step
-  uint64_t m_rxBytes       {0};   // bytes received this step
+  uint64_t m_txBytes       {0};
+  uint64_t m_rxBytes       {0};
 
   Ptr<TcpSocketState> m_tcb{nullptr};
 
 private:
-  void ScheduleNextStep ();
-  void SendObsGetAction ();
   void ApplyCwndIfSafe (Ptr<TcpSocketState> tcb);
 
   bool     m_started        {false};
-  Time     m_timeStep       {MilliSeconds (10)};  // match training step interval
   uint64_t m_rttSampleNum   {0};
   Time     m_rttSum         {MicroSeconds (0)};
   uint32_t m_segmentsAcked  {0};
   uint32_t m_packetLossCount{0};
   double   m_smoothedRtt_us {0.0};
   double   m_smoothedTput   {0.0};
+  Time     m_timeStep       {MilliSeconds (10)};
 };
 
 } // namespace ns3

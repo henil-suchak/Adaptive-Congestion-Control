@@ -1,30 +1,4 @@
-/* -*-  Mode: C++; c-file-style: "gnu"; indent-tabs-mode:nil; -*- */
-/*
- * FIXES APPLIED:
- *
- *   1. [GARBAGE INIT FIX] m_new_cWnd=3400, m_new_ssThresh=65535 in constructor.
- *
- *   2. [EARLY EXIT FIX] ScheduleNextStateRead() reschedules unconditionally
- *      at the TOP, keeping simulation alive when TCP goes idle.
- *
- *   3. [CWND CAP FIX] Actions from Python capped to 10000 segments max.
- *
- *   4. [EMA FIX — ROOT CAUSE OF RTT=0/Tput=0 on 80% of steps]
- *
- *      THE BUG: m_timeStep=10ms but network RTT=2*20ms=40ms.
- *      So 3 out of 4 calls to ScheduleNextStateRead() have no new
- *      ACK samples → m_rttSampleNum=0 → rtt_us=0 and throughput=0
- *      written to shared memory. Python sees 80% zero observations.
- *
- *      THE FIX: Exponential Moving Average smoothing.
- *      - When ACK arrives: smoothed = ALPHA*new + (1-ALPHA)*smoothed
- *      - On idle step:     smoothed = DECAY * smoothed
- *      - Write smoothed values to shared memory instead of raw zeros.
- *
- *      Result: idle steps carry forward last-known RTT/throughput,
- *      decaying toward 0 only after ~250ms of true silence.
- */
-
+#include <cstdlib>
 #include <algorithm>
 #include <numeric>
 #include "tcp-rl-env.h"
@@ -34,234 +8,236 @@ namespace ns3
 
 NS_LOG_COMPONENT_DEFINE ("ns3::TcpRlEnv");
 
-// EMA parameters
-static constexpr double EMA_ALPHA = 0.25;  // blend weight for new sample
-static constexpr double EMA_DECAY = 0.85;  // decay on idle steps
+static constexpr double EMA_ALPHA = 0.25;
+static constexpr double EMA_DECAY = 0.85;
+
+// ── Central Controller ────────────────────────────────────────────────────────
+
+RlCentralController& RlCentralController::Get() {
+  const char *shmEnv = std::getenv("NS3_SHM_ID");
+  uint16_t shmId = shmEnv ? (uint16_t)std::atoi(shmEnv) : 2333;
+  static RlCentralController instance(shmId);
+  return instance;
+}
+
+RlCentralController::RlCentralController(uint16_t id)
+  : Ns3AIRL<sTcpRlEnv, TcpRlAct>(id)
+{
+  SetCond(2, 0);
+  auto env = EnvSetterCond();
+  env->numAgents = 0;
+  GetCompleted();
+}
+
+void RlCentralController::Register(TcpTimeStepEnv* env) {
+  m_agents.push_back(env);
+  if (!m_started) {
+    m_started = true;
+    NS_LOG_UNCOND("[RlCentralController] First agent registered, starting central clock");
+    Simulator::Schedule(m_timeStep, &RlCentralController::ScheduleNextStateRead, this);
+  }
+}
+
+void RlCentralController::Unregister(TcpTimeStepEnv* env) {
+  auto it = std::find(m_agents.begin(), m_agents.end(), env);
+  if (it != m_agents.end()) m_agents.erase(it);
+}
+
+void RlCentralController::NotifyGameOver() {
+  auto envData = EnvSetterCond();
+  size_t numAgentsToPack = std::min(m_agents.size(), (size_t)MAX_AGENTS);
+  envData->numAgents = numAgentsToPack;
+  for (size_t i = 0; i < numAgentsToPack; ++i) {
+    envData->envType[i] = 1; // Game Over
+  }
+  SetCompleted();
+}
+
+void RlCentralController::ScheduleNextStateRead() {
+  Simulator::Schedule(m_timeStep, &RlCentralController::SendObsGetAction, this);
+}
+
+void RlCentralController::SendObsGetAction() {
+  if (m_agents.empty()) {
+    if (Simulator::Now() + m_timeStep < Simulator::GetMaximumSimulationTime())
+      ScheduleNextStateRead();
+    return;
+  }
+
+  auto envData = EnvSetterCond();
+  
+  size_t numAgentsToPack = std::min(m_agents.size(), (size_t)MAX_AGENTS);
+  envData->numAgents = numAgentsToPack;
+  envData->simTime_us = Simulator::Now().GetMicroSeconds();
+
+  for (size_t i = 0; i < numAgentsToPack; ++i) {
+    m_agents[i]->FillEnvData(envData, i);
+  }
+
+  SetCompleted();
+
+  auto actData = ActionGetterCond();
+  
+  for (size_t i = 0; i < numAgentsToPack; ++i) {
+    m_agents[i]->ApplyAction(actData, i);
+  }
+
+  GetCompleted();
+
+  if (Simulator::Now() + m_timeStep < Simulator::GetMaximumSimulationTime())
+    ScheduleNextStateRead();
+}
 
 // ── TcpRlEnv ─────────────────────────────────────────────────────────────────
 
-double TcpTimeStepEnv::s_bottleneckBps = 2000000.0;
+TcpRlEnv::TcpRlEnv (uint16_t id) { }
 
-TcpRlEnv::TcpRlEnv (uint16_t id) : Ns3AIRL<sTcpRlEnv, TcpRlAct> (id)
-{
-  SetCond (2, 0);
-}
-
-void TcpRlEnv::SetNodeId (uint32_t id)
-{
-  NS_LOG_FUNCTION (this);
-  m_nodeId = id;
-}
-
-void TcpRlEnv::SetSocketUuid (uint32_t id)
-{
-  NS_LOG_FUNCTION (this);
-  m_socketUuid = id;
-}
+void TcpRlEnv::SetNodeId (uint32_t id) { m_nodeId = id; }
+void TcpRlEnv::SetSocketUuid (uint32_t id) { m_socketUuid = id; }
 
 void TcpRlEnv::TxPktTrace (Ptr<const Packet>, const TcpHeader &, Ptr<const TcpSocketBase>)
 {
-  if (m_lastPktTxTime > MicroSeconds (0.0))
-    {
-      Time interTxTime = Simulator::Now () - m_lastPktTxTime;
-      m_interTxTimeSum += interTxTime;
-      m_interTxTimeNum++;
-    }
+  if (m_lastPktTxTime > MicroSeconds (0.0)) {
+    Time interTxTime = Simulator::Now () - m_lastPktTxTime;
+    m_interTxTimeSum += interTxTime;
+    m_interTxTimeNum++;
+  }
   m_lastPktTxTime = Simulator::Now ();
 }
 
 void TcpRlEnv::RxPktTrace (Ptr<const Packet>, const TcpHeader &, Ptr<const TcpSocketBase>)
 {
-  if (m_lastPktRxTime > MicroSeconds (0.0))
-    {
-      Time interRxTime = Simulator::Now () - m_lastPktRxTime;
-      m_interRxTimeSum += interRxTime;
-      m_interRxTimeNum++;
-    }
+  if (m_lastPktRxTime > MicroSeconds (0.0)) {
+    Time interRxTime = Simulator::Now () - m_lastPktRxTime;
+    m_interRxTimeSum += interRxTime;
+    m_interRxTimeNum++;
+  }
   m_lastPktRxTime = Simulator::Now ();
 }
 
 // ── TcpTimeStepEnv ───────────────────────────────────────────────────────────
 
+double TcpTimeStepEnv::s_bottleneckBps = 2000000.0;
+
 TcpTimeStepEnv::TcpTimeStepEnv (uint16_t id) : TcpRlEnv (id)
 {
-  m_new_cWnd     = 3400;   // 10 segments × 340 bytes
-  m_new_ssThresh = 65535;  // standard initial ssThresh
+  RlCentralController::Get().Register(this);
 }
 
-void
-TcpTimeStepEnv::ScheduleNextStateRead ()
+TcpTimeStepEnv::~TcpTimeStepEnv ()
 {
-  // Reschedule UNCONDITIONALLY first — keeps simulation alive even when TCP idle
-  Simulator::Schedule (m_timeStep, &TcpTimeStepEnv::ScheduleNextStateRead, this);
+  RlCentralController::Get().Unregister(this);
+}
 
-  if (m_tcb == nullptr)
-    return;
+uint32_t TcpTimeStepEnv::GetSsThresh (Ptr<const TcpSocketState> tcb, uint32_t bytesInFlight)
+{ return m_new_ssThresh; }
 
-  // ── Compute raw per-step values ──────────────────────────────────────────
+void TcpTimeStepEnv::IncreaseWindow (Ptr<TcpSocketState> tcb, uint32_t segmentsAcked)
+{
+  m_tcb = tcb;
+  if (tcb->m_congState == TcpSocketState::CA_OPEN || tcb->m_congState == TcpSocketState::CA_DISORDER) {
+    tcb->m_cWnd = m_new_cWnd;
+    tcb->m_ssThresh = m_new_ssThresh;
+  }
+}
 
-  uint64_t segmentsAckedSum = std::accumulate (
-      m_segmentsAcked.begin (), m_segmentsAcked.end (), 0ULL);
+void TcpTimeStepEnv::PktsAcked (Ptr<TcpSocketState> tcb, uint32_t segmentsAcked, const Time &rtt)
+{
+  m_tcb = tcb;
+  m_segmentsAckedTracking.push_back (segmentsAcked);
+  if (rtt > MicroSeconds (0)) {
+    m_rttSum = m_rttSum + rtt;
+    m_rttSampleNum++;
+  }
+  if (tcb->m_congState == TcpSocketState::CA_OPEN || tcb->m_congState == TcpSocketState::CA_DISORDER) {
+    tcb->m_cWnd = m_new_cWnd;
+    tcb->m_ssThresh = m_new_ssThresh;
+  }
+}
 
-  uint64_t bytesInFlightSum = std::accumulate (
-      m_bytesInFlight.begin (), m_bytesInFlight.end (), 0ULL);
+void TcpTimeStepEnv::CongestionStateSet (Ptr<TcpSocketState> tcb, const TcpSocketState::TcpCongState_t newState)
+{
+  m_tcb = tcb;
+  if (newState == TcpSocketState::CA_LOSS) m_packetLossCount++;
+  if (newState == TcpSocketState::CA_OPEN || newState == TcpSocketState::CA_DISORDER) {
+    tcb->m_cWnd = m_new_cWnd;
+    tcb->m_ssThresh = m_new_ssThresh;
+  }
+}
 
-  double stepSec = m_timeStep.GetSeconds ();
+void TcpTimeStepEnv::CwndEvent (Ptr<TcpSocketState> tcb, const TcpSocketState::TcpCAEvent_t event)
+{
+  m_tcb = tcb;
+  if (tcb->m_congState == TcpSocketState::CA_OPEN || tcb->m_congState == TcpSocketState::CA_DISORDER) {
+    tcb->m_cWnd = m_new_cWnd;
+    tcb->m_ssThresh = m_new_ssThresh;
+  }
+}
 
-  // Raw throughput this step (bytes/sec)
-  double rawTput = (stepSec > 0 && segmentsAckedSum > 0)
-      ? (static_cast<double> (segmentsAckedSum) * m_tcb->m_segmentSize / stepSec)
-      : 0.0;
+void TcpTimeStepEnv::FillEnvData (sTcpRlEnv* envData, size_t index)
+{
+  if (m_tcb) m_bytesInFlight.push_back(m_tcb->m_bytesInFlight.Get());
 
-  // Raw average RTT this step (microseconds)
-  double rawRtt_us = 0.0;
-  if (m_rttSampleNum > 0)
-    rawRtt_us = static_cast<double> (m_rttSum.GetMicroSeconds ()) / m_rttSampleNum;
+  double rawTput = 0.0;
+  if (m_interRxTimeNum > 0 && m_interRxTimeSum > MicroSeconds(0.0)) {
+    double interRxTimeSec = m_interRxTimeSum.GetSeconds() / m_interRxTimeNum;
+    if (interRxTimeSec > 0) rawTput = (m_tcb ? m_tcb->m_segmentSize * 8.0 : 340 * 8.0) / interRxTimeSec;
+  }
 
-  // ── EMA update ───────────────────────────────────────────────────────────
-  // FIX: Instead of writing raw values (which are 0 on 80% of steps because
-  // m_timeStep=10ms < RTT=40ms), blend into a smoothed signal that persists
-  // across idle steps and only decays after prolonged silence (~250ms).
+  if (m_rttSampleNum > 0) {
+    double rawRtt_us = m_rttSum.GetMicroSeconds() / (double)m_rttSampleNum;
+    m_smoothedRtt_us = EMA_ALPHA * rawRtt_us + (1.0 - EMA_ALPHA) * m_smoothedRtt_us;
+  } else {
+    m_smoothedRtt_us = EMA_DECAY * m_smoothedRtt_us;
+  }
 
-  if (m_rttSampleNum > 0)
-    {
-      // ACK(s) arrived this step — update EMA with new sample
-      m_smoothedRtt_us = EMA_ALPHA * rawRtt_us  + (1.0 - EMA_ALPHA) * m_smoothedRtt_us;
-      m_smoothedTput   = EMA_ALPHA * rawTput    + (1.0 - EMA_ALPHA) * m_smoothedTput;
-    }
-  else
-    {
-      // No ACKs this step (idle) — decay throughput toward 0 slowly.
-      // RTT does NOT decay because physical path delay doesn't shrink during silence!
-      m_smoothedTput   *= EMA_DECAY;
-    }
+  if (rawTput > 0) {
+    m_smoothedTput = EMA_ALPHA * rawTput + (1.0 - EMA_ALPHA) * m_smoothedTput;
+  } else {
+    m_smoothedTput = EMA_DECAY * m_smoothedTput;
+  }
 
-  // ── Write observation to shared memory ───────────────────────────────────
-  auto env = EnvSetterCond ();
-  env->socketUid   = m_socketUuid;
-  env->envType     = 1;
-  env->simTime_us  = Simulator::Now ().GetMicroSeconds ();
-  env->nodeId      = m_nodeId;
-  env->ssThresh    = m_tcb->m_ssThresh;
-  env->cWnd        = m_tcb->m_cWnd;
-  env->segmentSize = m_tcb->m_segmentSize;
+  envData->nodeId[index] = m_nodeId;
+  envData->socketUid[index] = m_socketUuid;
+  envData->envType[index] = 0;
+  envData->ssThresh[index] = m_tcb ? m_tcb->m_ssThresh.Get() : m_new_ssThresh;
+  envData->cWnd[index] = m_tcb ? m_tcb->m_cWnd.Get() : m_new_cWnd;
+  envData->segmentSize[index] = m_tcb ? m_tcb->m_segmentSize : 340;
+  envData->segmentsAcked[index] = std::accumulate(m_segmentsAckedTracking.begin(), m_segmentsAckedTracking.end(), 0);
+  
+  uint32_t currentBif = m_tcb ? m_tcb->m_bytesInFlight.Get() : 0;
+  if (!m_bytesInFlight.empty()) {
+    currentBif = std::accumulate(m_bytesInFlight.begin(), m_bytesInFlight.end(), 0) / m_bytesInFlight.size();
+  }
+  envData->bytesInFlight[index] = currentBif;
+  envData->rtt_us[index] = (int64_t)m_smoothedRtt_us;
+  envData->throughput[index] = m_smoothedTput;
+  envData->packetLoss[index] = m_packetLossCount;
 
-  env->bytesInFlight  = static_cast<uint32_t> (bytesInFlightSum);
-  env->segmentsAcked  = static_cast<uint32_t> (segmentsAckedSum);
-
-  // Write SMOOTHED values — this is the core fix
-  env->rtt_us    = static_cast<int64_t> (m_smoothedRtt_us);
-  env->throughput = m_smoothedTput;
-
-  env->packetLoss = m_packetLossCount;
-
-  SetCompleted ();   // Release — Python can now read
-
-  // ── Read action from shared memory ───────────────────────────────────────
-  auto act = ActionGetterCond ();
-
-  uint32_t segSize = m_tcb->m_segmentSize;
-  if (segSize == 0) segSize = 340;
-
-  // FIX: BDP-based cWnd cap — prevents agent from triggering Retransmission Timeouts.
-  // BDP = bottleneck_bw × RTT = 2,000,000 bps × 0.040s / 8 = 10,000 bytes ≈ 29 segments.
-  // Allowing 4× BDP = ~120 segments gives headroom for bursting without queue overflow.
-  // Previously: 10,000 segments (3.4MB) → agent could spike cWnd to 15,342 (seen in logs)
-  // → instant queue drop → RTO → TCP frozen for 1+ second = 100+ zero-reward steps.
-  //
-  // If smoothed RTT is available use it; otherwise fall back to 40ms (2×access_delay).
-  double rttSec = (m_smoothedRtt_us > 1000.0) ? (m_smoothedRtt_us / 1e6) : 0.040;
-  double bottleneckBps = TcpTimeStepEnv::s_bottleneckBps;  // Dynamic topology bandwidth
-  uint32_t bdpBytes    = static_cast<uint32_t> (bottleneckBps * rttSec / 8.0);
-  uint32_t maxCwnd     = std::max (static_cast<uint32_t>(1.5 * bdpBytes), 5 * segSize);
-  uint32_t minCwnd     = segSize;
-  uint32_t maxSsThresh = maxCwnd * 2;
-
-  uint32_t raw_cWnd     = act->new_cWnd;
-  uint32_t raw_ssThresh = act->new_ssThresh;
-
-  if (raw_cWnd < minCwnd)           raw_cWnd     = minCwnd;
-  if (raw_cWnd > maxCwnd)           raw_cWnd     = maxCwnd;
-  if (raw_ssThresh < minCwnd)       raw_ssThresh = minCwnd;
-  if (raw_ssThresh > maxSsThresh)   raw_ssThresh = maxSsThresh;
-
-  m_new_cWnd     = raw_cWnd;
-  m_new_ssThresh = raw_ssThresh;
-
-  GetCompleted ();   // Release — ns-3 can proceed
-
-  // Reset per-step accumulators (EMA state is preserved in m_smoothedRtt_us / m_smoothedTput)
-  m_rttSampleNum    = 0;
-  m_rttSum          = MicroSeconds (0);
+  m_rttSampleNum = 0;
+  m_rttSum = MicroSeconds(0);
+  m_interRxTimeNum = 0;
+  m_interRxTimeSum = MicroSeconds(0);
+  m_interTxTimeNum = 0;
+  m_interTxTimeSum = MicroSeconds(0);
   m_packetLossCount = 0;
-  m_interTxTimeNum  = 0;
-  m_interTxTimeSum  = MicroSeconds (0);
-  m_interRxTimeNum  = 0;
-  m_interRxTimeSum  = MicroSeconds (0);
-  m_bytesInFlight.clear ();
-  m_segmentsAcked.clear ();
+  m_bytesInFlight.clear();
+  m_segmentsAckedTracking.clear();
 }
 
-uint32_t
-TcpTimeStepEnv::GetSsThresh (Ptr<const TcpSocketState> tcb, uint32_t bytesInFlight)
+void TcpTimeStepEnv::ApplyAction (TcpRlAct* actData, size_t index)
 {
-  NS_LOG_FUNCTION (this);
-  m_tcb = tcb;
-  m_bytesInFlight.push_back (bytesInFlight);
+  uint32_t cwndCap = std::max(10000.0, s_bottleneckBps * 0.2 / 8.0);
+  uint32_t new_cWnd = std::min(actData->new_cWnd[index], cwndCap);
+  uint32_t new_ssThresh = std::min(actData->new_ssThresh[index], cwndCap);
 
-  if (!m_started)
-    {
-      m_started = true;
-      ScheduleNextStateRead ();
-    }
+  m_new_cWnd = std::max(new_cWnd, m_tcb ? m_tcb->m_segmentSize : (uint32_t)340);
+  m_new_ssThresh = std::max(new_ssThresh, m_tcb ? m_tcb->m_segmentSize : (uint32_t)340);
 
-  return m_new_ssThresh;
-}
-
-void
-TcpTimeStepEnv::IncreaseWindow (Ptr<TcpSocketState> tcb, uint32_t segmentsAcked)
-{
-  NS_LOG_FUNCTION (this);
-  m_tcb = tcb;
-  // NOTE: segmentsAcked is NOT pushed here — tracked in PktsAcked instead.
-  // IncreaseWindow is skipped during Fast Recovery, so tracking here caused
-  // throughput=0 during all recovery phases, giving the agent false signal.
-  m_bytesInFlight.push_back (tcb->m_bytesInFlight);
-
-  if (!m_started)
-    {
-      m_started = true;
-      ScheduleNextStateRead ();
-    }
-
-  tcb->m_cWnd = m_new_cWnd;
-}
-
-void
-TcpTimeStepEnv::PktsAcked (Ptr<TcpSocketState> tcb, uint32_t segmentsAcked, const Time &rtt)
-{
-  // FIX: Track segmentsAcked HERE (not in IncreaseWindow).
-  // PktsAcked fires for every ACK in ALL congestion states (Open, Recovery, Loss).
-  // This gives accurate throughput even during Fast Recovery.
-  m_tcb = tcb;
-  m_segmentsAcked.push_back (segmentsAcked);
-  m_rttSum += rtt;
-  m_rttSampleNum++;
-}
-
-void
-TcpTimeStepEnv::CongestionStateSet (Ptr<TcpSocketState> tcb,
-                                     const TcpSocketState::TcpCongState_t newState)
-{
-  m_tcb = tcb;
-  if (newState == TcpSocketState::CA_LOSS || newState == TcpSocketState::CA_RECOVERY)
-    m_packetLossCount++;
-}
-
-void
-TcpTimeStepEnv::CwndEvent (Ptr<TcpSocketState> tcb, const TcpSocketState::TcpCAEvent_t event)
-{
-  m_tcb = tcb;
+  if (m_tcb && (m_tcb->m_congState == TcpSocketState::CA_OPEN || m_tcb->m_congState == TcpSocketState::CA_DISORDER)) {
+    m_tcb->m_cWnd = m_new_cWnd;
+    m_tcb->m_ssThresh = m_new_ssThresh;
+  }
 }
 
 } // namespace ns3

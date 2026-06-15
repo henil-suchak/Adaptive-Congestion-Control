@@ -23,6 +23,8 @@ def parse_args():
     p.add_argument("--access_bandwidth", type=str, default="10Mbps")
     p.add_argument("--access_delay", type=str, default="20ms")
     p.add_argument("--queue_disc_type", type=str, default="ns3::PfifoFastQueueDisc")
+    p.add_argument("--topology_file", type=str, default="")
+    p.add_argument("--reward_profile", type=str, default="BALANCED")
     return p.parse_args()
 
 
@@ -62,6 +64,9 @@ class TcpLogCallback(BaseCallback):
                   f"cWnd:{info.get('cWnd','?')}->{info.get('new_cWnd','?')} | "
                   f"RTT:{info.get('rtt_us','?')}us | Tput:{tput_s} | "
                   f"Loss:{info.get('packetLoss','?')} | R:{reward:.4f}")
+        if os.path.exists("/sim/sim_server/.stop_training"):
+            print("\n[Training] .stop_training flag detected! Gracefully stopping...", flush=True)
+            return False
         return True
 
     def _on_training_end(self):
@@ -92,6 +97,8 @@ def main():
         access_bandwidth=args.access_bandwidth,
         access_delay=args.access_delay,
         queue_disc_type=args.queue_disc_type,
+        topology_file=args.topology_file,
+        reward_profile=args.reward_profile,
     )
 
     if args.resume and os.path.exists(args.resume):
@@ -99,17 +106,33 @@ def main():
         model = SAC.load(args.resume, env=env,
                          learning_rate=args.learning_rate, device="cpu")
     else:
+        # Determine specific gamma based on reward profile
+        profile_gamma = 0.97
+        if args.reward_profile == "AGGRESSIVE":
+            profile_gamma = 0.98
+        elif args.reward_profile == "CALM":
+            profile_gamma = 0.95
+
         model = SAC(
             "MlpPolicy", env,
-            learning_rate=args.learning_rate,
+            learning_rate=1e-4, # Expert recommended lower LR
             buffer_size=1_000_000, learning_starts=5_000,
-            batch_size=256, train_freq=4, gradient_steps=1,
-            gamma=0.99, ent_coef="auto", target_entropy="auto",
-            policy_kwargs=dict(net_arch=[256, 256, 128]),
+            batch_size=256, train_freq=4, gradient_steps=4, # Restored 1:1 data-to-grad
+            gamma=profile_gamma, # 33 steps tracking one RTT loop
+            tau=0.01, # Faster soft-target updates
+            ent_coef="auto", target_entropy=-0.5, # Exploit fast
+            policy_kwargs=dict(net_arch=[256, 256]), # Removed bottleneck 128
             verbose=1, device="cpu",
         )
 
     print(f"\n[Training] timesteps={args.timesteps:,}  steps/ep={steps_per_episode:,}")
+    
+    # Catch SIGTERM (from backend cancellation) to gracefully save the model
+    import signal
+    def sigterm_handler(signum, frame):
+        raise KeyboardInterrupt("SIGTERM received")
+    signal.signal(signal.SIGTERM, sigterm_handler)
+
     try:
         model.learn(
             total_timesteps=args.timesteps,
@@ -126,7 +149,11 @@ def main():
     except Exception as e:
         import traceback; traceback.print_exc(); raise
     finally:
+        # Save exact step model so it's not lost
+        final_model_name = f"sac_tcp_model_final_step_{model.num_timesteps}"
+        model.save(final_model_name)
         model.save("sac_tcp_model_final")
+        print(f"[Training] Saved {final_model_name}.zip")
         print("[Training] Saved sac_tcp_model_final.zip")
         env.close()
 

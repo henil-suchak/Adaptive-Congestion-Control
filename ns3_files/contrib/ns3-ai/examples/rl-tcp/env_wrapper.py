@@ -29,36 +29,36 @@ from py_interface import Ns3AIRL, Experiment, Reset
 
 
 # ── Shared memory struct layout (MUST match tcp-rl-env.cc exactly) ──────────
-from ctypes import Structure, c_uint32, c_uint8, c_int64, c_double, c_bool
+from ctypes import Structure, c_uint32, c_uint8, c_int64, c_double, c_bool, c_uint16
 
+MAX_AGENTS = 10
 
 class TcpRlEnv(Structure):
     """Mirrors sTcpRlEnv in tcp-rl-env.h — byte-for-byte match required."""
     _pack_ = 1
     _fields_ = [
-        ('nodeId',          c_uint32),
-        ('socketUid',       c_uint32),
-        ('envType',         c_uint8),
+        ('numAgents',       c_uint16),
+        ('nodeId',          c_uint32 * MAX_AGENTS),
+        ('socketUid',       c_uint32 * MAX_AGENTS),
+        ('envType',         c_uint8 * MAX_AGENTS),
         ('simTime_us',      c_int64),
-        ('ssThresh',        c_uint32),
-        ('cWnd',            c_uint32),
-        ('segmentSize',     c_uint32),
-        ('segmentsAcked',   c_uint32),
-        ('bytesInFlight',   c_uint32),
-        ('rtt_us',          c_int64),
-        ('throughput',      c_double),
-        ('packetLoss',      c_uint32),
+        ('ssThresh',        c_uint32 * MAX_AGENTS),
+        ('cWnd',            c_uint32 * MAX_AGENTS),
+        ('segmentSize',     c_uint32 * MAX_AGENTS),
+        ('segmentsAcked',   c_uint32 * MAX_AGENTS),
+        ('bytesInFlight',   c_uint32 * MAX_AGENTS),
+        ('rtt_us',          c_int64 * MAX_AGENTS),
+        ('throughput',      c_double * MAX_AGENTS),
+        ('packetLoss',      c_uint32 * MAX_AGENTS),
     ]
-
 
 class TcpRlAct(Structure):
     """Mirrors TcpRlAct in tcp-rl-env.h."""
     _pack_ = 1
     _fields_ = [
-        ('new_ssThresh',    c_uint32),
-        ('new_cWnd',        c_uint32),
+        ('new_ssThresh',    c_uint32 * MAX_AGENTS),
+        ('new_cWnd',        c_uint32 * MAX_AGENTS),
     ]
-
 
 # ── Constants ────────────────────────────────────────────────────────────────
 SHM_KEY         = 1234
@@ -99,15 +99,14 @@ class Ns3TcpEnv(gym.Env):
     metadata = {'render_modes': []}
 
     observation_space = Box(
-        low   = np.zeros(6, dtype=np.float32),
-        high  = np.ones(6,  dtype=np.float32),   # normalized [0,1]
+        low   = np.zeros(MAX_AGENTS * 6, dtype=np.float32),
+        high  = np.ones(MAX_AGENTS * 6,  dtype=np.float32),   # normalized [0,1]
         dtype = np.float32,
     )
-    # Action: multiplier on cWnd. Tightened to [0.8, 1.2] to prevent
-    # random policy from causing huge cWnd spikes early in training.
+    # Default action space (dynamically overridden in __init__)
     action_space = Box(
-        low   = np.array([0.8], dtype=np.float32),
-        high  = np.array([1.2], dtype=np.float32),
+        low   = np.full(MAX_AGENTS, 0.8, dtype=np.float32),
+        high  = np.full(MAX_AGENTS, 1.2, dtype=np.float32),
         dtype = np.float32,
     )
 
@@ -123,6 +122,8 @@ class Ns3TcpEnv(gym.Env):
         access_bandwidth     = "10Mbps",
         access_delay         = "20ms",
         queue_disc_type      = "ns3::PfifoFastQueueDisc",
+        topology_file        = "",
+        reward_profile       = "BALANCED",
     ):
         super().__init__()
         self.shm_key      = shm_key
@@ -135,6 +136,24 @@ class Ns3TcpEnv(gym.Env):
         self.access_bandwidth     = access_bandwidth
         self.access_delay         = access_delay
         self.queue_disc_type      = queue_disc_type
+        self.topology_file        = topology_file
+        self.reward_profile       = reward_profile
+
+        # Dynamic Action Space based on Profile
+        if self.reward_profile == "AGGRESSIVE":
+            act_low, act_high = 0.5, 2.0
+        elif self.reward_profile == "CALM":
+            act_low, act_high = 0.7, 1.1
+        else: # BALANCED
+            act_low, act_high = 0.8, 1.2
+            
+        self.action_space = Box(
+            low   = np.full(MAX_AGENTS, act_low, dtype=np.float32),
+            high  = np.full(MAX_AGENTS, act_high, dtype=np.float32),
+            dtype = np.float32,
+        )
+        self.act_low = act_low
+        self.act_high = act_high
 
         # Calculate dynamic normalization bounds based on topology
         bottleneck_bps = parse_bps(self.bottleneck_bandwidth)
@@ -223,17 +242,14 @@ class Ns3TcpEnv(gym.Env):
         # 5. Start fresh ns-3 simulation — use episode number as seed for diversity
         sim_seed = (seed if seed is not None else self._episode) % 10000 + 1
         setting = {
-            'transport_prot': 'ns3::TcpRlTimeBased',
-            'duration':       self.sim_duration,
-            'simSeed':        sim_seed,
-            'data':           10000,   # 10,000 MB ≈ unlimited for any sim_duration
-                                       # data=0 means 0 MB (send nothing!) — NOT unlimited
-            'bottleneck_bandwidth': self.bottleneck_bandwidth,
-            'bottleneck_delay':     self.bottleneck_delay,
-            'access_bandwidth':     self.access_bandwidth,
-            'access_delay':         self.access_delay,
-            'queue_disc_type':      self.queue_disc_type,
+            'duration':        self.sim_duration,
+            'bottleneckBw':    self.bottleneck_bandwidth,
+            'bottleneckDelay': self.bottleneck_delay,
+            'accessBw':        self.access_bandwidth,
+            'accessDelay':     self.access_delay,
         }
+        if self.topology_file:
+            setting['topologyFile'] = self.topology_file
         print("[Env] Step 5: Starting new ns-3...", flush=True)
         self._exp.run(setting=setting, show_output=True)
         time.sleep(2.0)   # increased: give ns-3 more time to init on macOS ARM64
@@ -264,11 +280,21 @@ class Ns3TcpEnv(gym.Env):
         # Send a default "keep current cWnd" action so sync thread can proceed
         # FIX: cap ssThresh to a sane value — 0xFFFFFFFF must NEVER be used as
         # new_ssThresh in the first action because ns-3 may interpret it as cWnd
-        default_cWnd     = max(obs_dict.get('cWnd', 3400), 340)
-        default_ssThresh = min(obs_dict.get('ssThresh', 65535), 0x7FFFFFFF)
+        default_cWnds = []
+        default_ssThreshs = []
+        for i in range(MAX_AGENTS):
+            if i < obs_dict['numAgents']:
+                cWnd = max(obs_dict['agents'][i].get('cWnd', 3400), 340)
+                ssThresh = min(obs_dict['agents'][i].get('ssThresh', 65535), 0x7FFFFFFF)
+                default_cWnds.append(cWnd)
+                default_ssThreshs.append(ssThresh)
+            else:
+                default_cWnds.append(3400)
+                default_ssThreshs.append(65535)
+
         self._act_queue.put({
-            'new_cWnd':     default_cWnd,
-            'new_ssThresh': default_ssThresh,
+            'new_cWnds':     default_cWnds,
+            'new_ssThreshs': default_ssThreshs,
         })
 
         obs = self._to_obs(obs_dict)
@@ -289,24 +315,37 @@ class Ns3TcpEnv(gym.Env):
             obs = self._last_obs if hasattr(self, '_last_obs') else np.zeros(6, dtype=np.float32)
             return obs, 0.0, False, True, {'early_termination': True}
 
-        # 2. Compute reward
-        reward = self._compute_reward(obs_dict)
+        # 2. Compute reward (sum over active agents)
+        reward = 0.0
+        for i in range(obs_dict['numAgents']):
+            reward += self._compute_reward(obs_dict['agents'][i])
 
-        # 3. Compute action — cWnd multiplier capped to dynamic max segments
-        factor    = float(np.clip(action[0], 0.8, 1.2))
-        cWnd      = obs_dict['cWnd']
-        seg_size  = max(obs_dict['segmentSize'], 340)
-        MAX_CWND  = max(self.MAX_CWND_BYTES, seg_size * 10)
-        new_cWnd  = int(np.clip(cWnd * factor, seg_size, MAX_CWND))
-        if factor < 1.0:
-            new_ssThresh = int(new_cWnd * 0.75)
-        else:
-            new_ssThresh = min(int(new_cWnd * 2), MAX_CWND * 2)
+        # 3. Compute actions
+        new_cWnds = []
+        new_ssThreshs = []
+        for i in range(MAX_AGENTS):
+            if i < obs_dict['numAgents']:
+                agent_obs = obs_dict['agents'][i]
+                factor    = float(np.clip(action[i], self.act_low, self.act_high))
+                cWnd      = agent_obs['cWnd']
+                seg_size  = max(agent_obs['segmentSize'], 340)
+                MAX_CWND  = max(self.MAX_CWND_BYTES, seg_size * 10)
+                new_cWnd  = int(np.clip(cWnd * factor, seg_size, MAX_CWND))
+                if factor < 1.0:
+                    new_ssThresh = int(new_cWnd * 0.75)
+                else:
+                    new_ssThresh = min(int(new_cWnd * 2), MAX_CWND * 2)
+            else:
+                new_cWnd = 3400
+                new_ssThresh = 65535
+                
+            new_cWnds.append(new_cWnd)
+            new_ssThreshs.append(new_ssThresh)
 
         # 4. Send action to sync thread (NON-BLOCKING put with timeout)
         try:
             self._act_queue.put(
-                {'new_cWnd': new_cWnd, 'new_ssThresh': new_ssThresh},
+                {'new_cWnds': new_cWnds, 'new_ssThreshs': new_ssThreshs},
                 timeout=QUEUE_TIMEOUT,
             )
         except queue.Full:
@@ -323,12 +362,15 @@ class Ns3TcpEnv(gym.Env):
         self._last_obs = obs  # cache for early termination fallback
         info = {
             'episode_step': self._episode_step,
-            'cWnd':         obs_dict['cWnd'],
-            'rtt_us':       obs_dict['rtt_us'],
-            'throughput':   obs_dict['throughput'],
-            'packetLoss':   obs_dict['packetLoss'],
-            'new_cWnd':     new_cWnd,
+            'numAgents':    obs_dict['numAgents']
         }
+        if obs_dict['numAgents'] > 0:
+            agent_0 = obs_dict['agents'][0]
+            info['cWnd'] = agent_0['cWnd']
+            info['new_cWnd'] = new_cWnds[0]
+            info['rtt_us'] = agent_0['rtt_us']
+            info['throughput'] = agent_0['throughput']
+            info['packetLoss'] = agent_0['packetLoss']
         return obs, reward, terminated, truncated, info
 
     def close(self):
@@ -355,8 +397,8 @@ class Ns3TcpEnv(gym.Env):
 
         # Pre-computed action for the NEXT SHM write (pipelining)
         pending_action = {
-            'new_cWnd':     3400,    # safe default: ~10 segments
-            'new_ssThresh': 65535,
+            'new_cWnds':     [3400] * MAX_AGENTS,    # safe default: ~10 segments
+            'new_ssThreshs': [65535] * MAX_AGENTS,
         }
 
         while not self._stop_event.is_set():
@@ -368,44 +410,58 @@ class Ns3TcpEnv(gym.Env):
                         break
 
                     # Read observation
+                    numAgents = data.env.numAgents
                     obs_dict = {
-                        'nodeId':        data.env.nodeId,
-                        'socketUid':     data.env.socketUid,
-                        'envType':       data.env.envType,
-                        'simTime_us':    data.env.simTime_us,
-                        'ssThresh':      data.env.ssThresh,
-                        'cWnd':          data.env.cWnd,
-                        'segmentSize':   max(data.env.segmentSize, 340),
-                        'segmentsAcked': data.env.segmentsAcked,
-                        'bytesInFlight': data.env.bytesInFlight,
-                        'rtt_us':        data.env.rtt_us,
-                        'throughput':    data.env.throughput,
-                        'packetLoss':    data.env.packetLoss,
+                        'numAgents': numAgents,
+                        'agents': []
                     }
-
-                    # Sanitize fields
-                    seg = max(obs_dict['segmentSize'], 340)
-                    if obs_dict['cWnd'] == 0 or obs_dict['cWnd'] > seg * 1000:
-                        obs_dict['cWnd'] = seg
-                    if obs_dict['ssThresh'] == 0 or obs_dict['ssThresh'] > seg * 2000:
-                        obs_dict['ssThresh'] = seg * 100
-                    if obs_dict['rtt_us'] < 0 or obs_dict['rtt_us'] > 500_000:
-                        obs_dict['rtt_us'] = 0
-                    if obs_dict['throughput'] < 0 or obs_dict['throughput'] > 2_500_000:
-                        obs_dict['throughput'] = 0.0
-                    if obs_dict['bytesInFlight'] > seg * 1000:
-                        obs_dict['bytesInFlight'] = 0
-                    if obs_dict['packetLoss'] > 1000:
-                        obs_dict['packetLoss'] = 0
+                    
+                    for i in range(MAX_AGENTS):
+                        if i < numAgents:
+                            agent_obs = {
+                                'nodeId':        data.env.nodeId[i],
+                                'socketUid':     data.env.socketUid[i],
+                                'envType':       data.env.envType[i],
+                                'simTime_us':    data.env.simTime_us,
+                                'ssThresh':      data.env.ssThresh[i],
+                                'cWnd':          data.env.cWnd[i],
+                                'segmentSize':   max(data.env.segmentSize[i], 340),
+                                'segmentsAcked': data.env.segmentsAcked[i],
+                                'bytesInFlight': data.env.bytesInFlight[i],
+                                'rtt_us':        data.env.rtt_us[i],
+                                'throughput':    data.env.throughput[i],
+                                'packetLoss':    data.env.packetLoss[i],
+                            }
+                            # Sanitize fields
+                            seg = agent_obs['segmentSize']
+                            if agent_obs['cWnd'] == 0 or agent_obs['cWnd'] > seg * 1000:
+                                agent_obs['cWnd'] = seg
+                            if agent_obs['ssThresh'] == 0 or agent_obs['ssThresh'] > seg * 2000:
+                                agent_obs['ssThresh'] = seg * 100
+                            if agent_obs['rtt_us'] < 0 or agent_obs['rtt_us'] > 500_000:
+                                agent_obs['rtt_us'] = 0
+                            if agent_obs['throughput'] < 0 or agent_obs['throughput'] > 2_500_000:
+                                agent_obs['throughput'] = 0.0
+                            if agent_obs['bytesInFlight'] > seg * 1000:
+                                agent_obs['bytesInFlight'] = 0
+                            if agent_obs['packetLoss'] > 1000:
+                                agent_obs['packetLoss'] = 0
+                            
+                            obs_dict['agents'].append(agent_obs)
 
                     # Write the pending action (from previous step or default)
-                    seg_size  = max(obs_dict.get('segmentSize', 340), 340)
-                    MAX_CWND  = max(self.MAX_CWND_BYTES, seg_size * 10)
-                    MIN_CWND  = seg_size
-                    safe_cWnd     = int(np.clip(pending_action['new_cWnd'],     MIN_CWND, MAX_CWND))
-                    safe_ssThresh = int(np.clip(pending_action['new_ssThresh'], MIN_CWND, MAX_CWND * 2))
-                    data.act.new_cWnd     = safe_cWnd
-                    data.act.new_ssThresh = safe_ssThresh
+                    for i in range(MAX_AGENTS):
+                        if i < numAgents:
+                            seg_size  = max(obs_dict['agents'][i].get('segmentSize', 340), 340)
+                            MAX_CWND  = max(self.MAX_CWND_BYTES, seg_size * 10)
+                            MIN_CWND  = seg_size
+                            safe_cWnd     = int(np.clip(pending_action['new_cWnds'][i],     MIN_CWND, MAX_CWND))
+                            safe_ssThresh = int(np.clip(pending_action['new_ssThreshs'][i], MIN_CWND, MAX_CWND * 2))
+                            data.act.new_cWnd[i]     = safe_cWnd
+                            data.act.new_ssThresh[i] = safe_ssThresh
+                        else:
+                            data.act.new_cWnd[i] = 3400
+                            data.act.new_ssThresh[i] = 65535
                 # Lock released — C++ reads action and advances
 
                 # Pass obs to main thread
@@ -424,8 +480,8 @@ class Ns3TcpEnv(gym.Env):
                         break
                     print("[SyncThread] WARNING: Timed out waiting for action.", flush=True)
                     pending_action = {
-                        'new_cWnd':      obs_dict['cWnd'],
-                        'new_ssThresh':  obs_dict['ssThresh'],
+                        'new_cWnds':      [agent['cWnd'] for agent in obs_dict.get('agents', [])] + [3400]*(MAX_AGENTS-obs_dict.get('numAgents', 0)),
+                        'new_ssThreshs':  [agent['ssThresh'] for agent in obs_dict.get('agents', [])] + [65535]*(MAX_AGENTS-obs_dict.get('numAgents', 0)),
                     }
 
             except Exception as e:
@@ -447,44 +503,100 @@ class Ns3TcpEnv(gym.Env):
         if throughput == 0 and rtt_us == 0:
             return 0.0
 
-        # 1. Throughput: sqrt gives gradient at all levels
-        TMAX        = self.TMAX
-        tput_norm   = min(throughput / TMAX, 1.0)
-        reward_tput = float(np.sqrt(tput_norm))
+        TMAX = self.TMAX
+        RTT_MIN = self.RTT_MIN_US
+        BDP = max(self.BDP_BYTES, 10_000.0)
+        
+        tput_norm = min(throughput / TMAX, 1.0)
+        rtt_safe = max(rtt_us, RTT_MIN)
 
-        # 2. RTT: quadratic penalty above physical baseline
-        RTT_MIN     = self.RTT_MIN_US
-        rtt_safe    = max(rtt_us, RTT_MIN)
-        excess      = max(rtt_safe - RTT_MIN, 0.0) / (RTT_MIN * 10.0)  # scale by baseline
-        penalty_rtt = min(excess ** 2 * 12.0, 1.0)
+        if self.reward_profile == "AGGRESSIVE":
+            # 1. Throughput: Piecewise with convex kink at 90%
+            if tput_norm < 0.90:
+                reward_tput = float(np.sqrt(tput_norm))
+            else:
+                reward_tput = 1.0 + 3.0 * (tput_norm - 0.90)
 
-        # 3. Loss: hard base + proportional
-        if loss > 0:
-            penalty_loss = 0.3 + min(loss * 0.05, 0.5)
-        else:
-            penalty_loss = 0.0
+            # 2. RTT Penalty: Cubic, fires beyond 4x base RTT
+            e = (rtt_safe - RTT_MIN) / (4.0 * RTT_MIN)
+            penalty_rtt = min((e ** 3) * 0.6, 0.4) if e > 0 else 0.0
 
-        # 4. Stability: small bonus for cWnd near BDP, only when tput is high
-        BDP        = max(self.BDP_BYTES, 10_000.0)
-        cwnd_ratio = cWnd / BDP
-        gauss      = float(np.exp(-((cwnd_ratio - 1.0) ** 2) / (2 * 0.5 ** 2)))
-        stability  = 0.1 * tput_norm * gauss
+            # 3. Loss
+            penalty_loss = 0.3 + min(loss * 0.05, 0.5) if loss > 0 else 0.0
 
-        reward = reward_tput - penalty_rtt - penalty_loss + stability
-        return float(np.clip(reward, -2.0, 1.1))
+            # 4. Stability
+            cwnd_ratio = cWnd / BDP
+            gauss = float(np.exp(-((cwnd_ratio - 1.0) ** 2) / (2 * 0.5 ** 2)))
+            stability = 0.1 * tput_norm * gauss
+            
+            reward = reward_tput - penalty_rtt - penalty_loss + stability
+            return float(np.clip(reward, -2.0, 1.5))
+
+        elif self.reward_profile == "CALM":
+            # 1. Throughput
+            reward_tput = float(np.sqrt(tput_norm))
+
+            # 2. RTT Penalty: Exponential, fires at first byte
+            e = (rtt_safe - RTT_MIN) / RTT_MIN
+            penalty_rtt = min(1.0 * (np.exp(3.0 * e) - 1.0), 1.2) if e > 0 else 0.0
+
+            # 3. Loss: Catastrophic
+            penalty_loss = 0.8 + min((loss - 1) * 0.10, 0.7) if loss > 0 else 0.0
+
+            # 4. Stability
+            cwnd_ratio = cWnd / BDP
+            gauss = float(np.exp(-((cwnd_ratio - 1.0) ** 2) / (2 * 0.5 ** 2)))
+            stability = 0.1 * tput_norm * gauss
+
+            reward = reward_tput - penalty_rtt - penalty_loss + stability
+            return float(np.clip(reward, -2.0, 1.1))
+
+        else: # BALANCED
+            # 1. Throughput: Log-utility (Proportional Fairness)
+            reward_tput = float(np.log10(1.0 + 9.0 * tput_norm))
+
+            # 2. RTT Penalty: Piecewise safe zone
+            e = (rtt_safe - RTT_MIN) / RTT_MIN
+            if e <= 0.5:
+                penalty_rtt = 0.0
+            elif e <= 2.0:
+                penalty_rtt = 0.8 * ((e - 0.5) ** 2)
+            else:
+                penalty_rtt = 1.2
+
+            # 3. Loss
+            penalty_loss = 0.3 + min(loss * 0.05, 0.5) if loss > 0 else 0.0
+
+            # 4. Stability
+            cwnd_ratio = cWnd / BDP
+            gauss = float(np.exp(-((cwnd_ratio - 1.0) ** 2) / (2 * 0.5 ** 2)))
+            stability = 0.1 * tput_norm * gauss
+
+            reward = reward_tput - penalty_rtt - penalty_loss + stability
+            return float(np.clip(reward, -2.0, 1.1))
 
         
     def _to_obs(self, obs_dict: dict) -> np.ndarray:
-        """Convert obs dict to normalized numpy array in [0, 1]."""
-        raw = np.array([
-            obs_dict['cWnd'],
-            obs_dict['rtt_us'],
-            obs_dict['throughput'],
-            obs_dict['packetLoss'],
-            obs_dict['segmentSize'],
-            obs_dict['bytesInFlight'],
-        ], dtype=np.float32)
-        return np.clip(raw / self.OBS_MAX, 0.0, 1.0)
+        """Convert obs dict to normalized numpy array in [0, 1] for all agents."""
+        obs_array = np.zeros(MAX_AGENTS * 6, dtype=np.float32)
+        
+        for i in range(MAX_AGENTS):
+            if i < obs_dict.get('numAgents', 0):
+                agent_obs = obs_dict['agents'][i]
+                raw = np.array([
+                    agent_obs['cWnd'],
+                    agent_obs['rtt_us'],
+                    agent_obs['throughput'],
+                    agent_obs['packetLoss'],
+                    agent_obs['segmentSize'],
+                    agent_obs['bytesInFlight'],
+                ], dtype=np.float32)
+                norm = np.clip(raw / self.OBS_MAX, 0.0, 1.0)
+                obs_array[i*6:(i+1)*6] = norm
+            else:
+                obs_array[i*6:(i+1)*6] = 0.0
+                
+        return obs_array
 
     def _stop_background_thread(self):
         if self._loop_thread and self._loop_thread.is_alive():
@@ -510,7 +622,10 @@ class Ns3TcpEnv(gym.Env):
             # Unblock queues so thread can exit
             self._drain_queue(self._obs_queue)
             try:
-                self._act_queue.put_nowait({'new_cWnd': 0, 'new_ssThresh': 0})
+                self._act_queue.put_nowait({
+                    'new_cWnds': [0] * MAX_AGENTS, 
+                    'new_ssThreshs': [0] * MAX_AGENTS
+                })
             except queue.Full:
                 pass
             self._loop_thread.join(timeout=5.0)

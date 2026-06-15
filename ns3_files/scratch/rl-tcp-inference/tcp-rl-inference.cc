@@ -61,20 +61,8 @@ uint64_t TcpRlInference::GenerateUuid ()
 
 void TcpRlInference::CreateEnv ()
 {
-  // CRITICAL: SocketType applies TcpRlInference to ALL sockets (sender + sink).
-  // Only the FIRST instance should create the env and own the SHM block.
-  // The sink's CC instance does nothing (env stays null, all hooks return early).
-  static bool s_envCreated = false;
-  if (s_envCreated)
-    {
-      NS_LOG_UNCOND ("[TcpRlInference] Skipping env creation (already created by sender)");
-      return;
-    }
-  s_envCreated = true;
-
-  // Read dynamic SHM ID from environment (set by process_svc.py)
   const char* shmEnv = std::getenv("NS3_SHM_ID");
-  uint16_t shmId = shmEnv ? (uint16_t)std::atoi(shmEnv) : 2333;
+  uint16_t shmId = shmEnv ? (uint16_t)std::atoi(shmEnv) : 2334; // default inference ID
   env = Create<TcpRlInferenceEnv> (shmId);
   env->SetSocketUuid (TcpRlInference::GenerateUuid ());
   ConnectSocketCallbacks ();

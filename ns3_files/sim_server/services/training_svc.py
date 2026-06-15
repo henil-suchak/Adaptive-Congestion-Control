@@ -120,7 +120,7 @@ def _post_checkpoint(training_run_id, experiment_id, checkpoint_name, total_step
 def _training_worker(training_run_id, experiment_id, total_timesteps, learning_rate, network_arch,
                      bottleneck_bw="2Mbps", bottleneck_delay="20ms",
                      access_bw="10Mbps", access_delay="20ms",
-                     queue_type="ns3::PfifoFastQueueDisc"):
+                     queue_type="ns3::PfifoFastQueueDisc", graph_json=None, reward_profile="BALANCED"):
     """
     Main training worker function. Runs in a separate thread.
     Spawns train_sac.py, parses output, streams metrics.
@@ -153,7 +153,19 @@ def _training_worker(training_run_id, experiment_id, total_timesteps, learning_r
         "--access_bandwidth", str(access_bw),
         "--access_delay", str(access_delay),
         "--queue_disc_type", str(queue_type),
+        "--reward_profile", str(reward_profile),
     ]
+
+    if graph_json:
+        if '"algorithm":"SAC"' not in graph_json.replace(" ", ""):
+            print("⚠️ [Training] No SAC Agent found in topology! Training requires an SAC Agent.", flush=True)
+            _training_state.update({"busy": False, "status": "failed"})
+            return
+            
+        topology_file = f"/tmp/train_topology_{experiment_id}.json"
+        with open(topology_file, "w") as f:
+            f.write(graph_json)
+        cmd.extend(["--topology_file", topology_file])
 
     print(f"🎓 [Training] Starting train_sac.py for run #{training_run_id}", flush=True)
     print(f"🎓 [Training] CMD: {' '.join(cmd)}", flush=True)
@@ -200,8 +212,8 @@ def _training_worker(training_run_id, experiment_id, total_timesteps, learning_r
                 _training_state["currentEpisode"] = latest_episode
                 _training_state["avgReward"] = latest_reward
 
-                # Stream every 500 steps to avoid flooding
-                if latest_step % 500 == 0 and ws:
+                # Stream every 50 steps to update UI quickly
+                if latest_step % 50 == 0 and ws:
                     payload = {
                         "trainingRunId": training_run_id,
                         "currentTimestep": latest_step,
@@ -261,9 +273,12 @@ def _training_worker(training_run_id, experiment_id, total_timesteps, learning_r
 
                 _post_checkpoint(training_run_id, experiment_id, final_name, latest_step)
 
-        # Wait for process to finish
-        _training_process.wait()
-        exit_code = _training_process.returncode
+        # Wait for process to finish (if it hasn't been set to None by cancellation)
+        if _training_process is not None:
+            _training_process.wait()
+            exit_code = _training_process.returncode
+        else:
+            exit_code = -1 # cancelled
 
         # Also copy any checkpoint models to the shared models dir
         try:
@@ -355,6 +370,8 @@ def run_training(config: dict):
             config.get("accessBw", "10Mbps"),
             config.get("accessDelay", "20ms"),
             config.get("queueType", "ns3::PfifoFastQueueDisc"),
+            config.get("graphJson", None),
+            config.get("rewardProfile", "BALANCED"),
         ),
         daemon=True,
     )
@@ -363,21 +380,29 @@ def run_training(config: dict):
 
 
 def signal_stop_training():
-    """Stop the current training subprocess."""
     global _training_process
     print("🛑 [Training] Stop signal received.", flush=True)
-    if _training_process is not None:
+    if _training_process:
+        print("🛑 [Training] Writing .stop_training flag for graceful shutdown...", flush=True)
+        # 1. Write the flag file
         try:
-            _training_process.terminate()
-            _training_process.wait(timeout=10)
-        except Exception:
-            try:
-                _training_process.kill()
-            except Exception:
-                pass
+            with open("/sim/sim_server/.stop_training", "w") as f:
+                f.write("stop")
+        except Exception as e:
+            print(f"⚠️ [Training] Could not write .stop_training: {e}", flush=True)
+            
+        # 2. Wait patiently for Python/C++ loop to hit the next step and exit cleanly
+        try:
+            _training_process.wait(timeout=15)
+            print("✅ [Training] Graceful shutdown completed cleanly.", flush=True)
+        except subprocess.TimeoutExpired:
+            print("⚠️ [Training] Graceful shutdown timed out! Force killing...", flush=True)
+            _training_process.kill()
+            
+        # 3. Clean up the flag
+        if os.path.exists("/sim/sim_server/.stop_training"):
+            os.remove("/sim/sim_server/.stop_training")
+            
         _training_process = None
-    # Kill any lingering NS-3 processes
-    os.system("pkill -9 -f rl-tcp 2>/dev/null || true")
-    os.system("rm -f /dev/shm/*")
-    os.system("ipcrm -a 2>/dev/null || true")
-    print("🛑 [Training] Training stopped and cleaned up.", flush=True)
+        return {"status": "stopping"}
+    return {"status": "not_running"}

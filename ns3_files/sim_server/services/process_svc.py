@@ -9,8 +9,16 @@ WAF_DIR = "/sim/ns-allinone-3.35/ns-3.35"
 def start_cpp_binary(experiment_id: int, shm_id: int = 2334,
                      bottleneck_bw: str = "2Mbps", bottleneck_delay: str = "20ms",
                      access_bw: str = "10Mbps", access_delay: str = "20ms",
-                     mtu: int = 400):
+                     mtu: int = 400, sim_duration: int = 200, 
+                     graph_json: str = None, return_process: bool = False):
     binary_path = "/sim/ns-allinone-3.35/ns-3.35/build/scratch/rl-tcp-inference/rl-tcp-inference"
+    
+    topology_file = f"/tmp/topology_{experiment_id}.json"
+    if graph_json:
+        with open(topology_file, "w") as f:
+            f.write(graph_json)
+    elif os.path.exists(topology_file):
+        os.remove(topology_file)
     
     # 1. Define the directory where the .so files actually exist
     lib_path = os.path.join(WAF_DIR, "build", "lib")
@@ -25,20 +33,29 @@ def start_cpp_binary(experiment_id: int, shm_id: int = 2334,
     # 4. Pass the dynamic SHM ID to the C++ binary via environment variable
     custom_env["NS3_SHM_ID"] = str(shm_id)
 
-    process = subprocess.Popen(
-        [binary_path,
+    cmd = [binary_path,
          f"--bottleneckBw={bottleneck_bw}",
          f"--bottleneckDelay={bottleneck_delay}",
          f"--accessBw={access_bw}",
          f"--accessDelay={access_delay}",
-         f"--mtu={mtu}"],
+         f"--duration={sim_duration}",
+         f"--mtu={mtu}"]
+    
+    if graph_json:
+        cmd.append(f"--topologyFile={topology_file}")
+
+    process = subprocess.Popen(
+        cmd,
         cwd=WAF_DIR,
         stdout=sys.stdout,
         stderr=sys.stderr,
         env=custom_env
     )
-    active_simulations[experiment_id] = process
+    active_simulations[experiment_id] = process.pid
     print(f"🚀 [Process] Started C++ binary PID={process.pid} for Exp {experiment_id} (SHM={shm_id})", flush=True)
+
+    if return_process:
+        return process
     return process
 
 def kill_cpp_binary(experiment_id: int) -> bool:

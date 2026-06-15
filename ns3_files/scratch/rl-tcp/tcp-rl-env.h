@@ -1,23 +1,3 @@
-/* -*- Mode:C++; c-file-style:"gnu"; indent-tabs-mode:nil; -*- */
-/*
- * FIXES APPLIED:
- *   1. [GARBAGE INIT FIX] m_new_cWnd / m_new_ssThresh have safe defaults.
- *
- *   2. [EMA FIX] Added m_smoothedRtt_us and m_smoothedTput to carry
- *      forward last-known RTT and throughput across idle 10ms steps.
- *
- *      ROOT CAUSE of RTT=0 / Tput=0 on 80% of steps:
- *        - m_timeStep = 10ms fires every 10ms
- *        - But network RTT = 2 * access_delay = 2 * 20ms = 40ms
- *        - So 3 out of 4 steps have ZERO new ACKs arriving
- *        - Raw per-step values = 0 on those steps
- *        - EMA decays slowly instead of snapping to 0 instantly
- *
- *      Parameters:
- *        EMA_ALPHA = 0.25  (new sample weight when ACK arrives)
- *        EMA_DECAY = 0.85  (decay factor on idle steps, ~0 after 25 idle steps)
- */
-
 #pragma once
 #include "ns3/core-module.h"
 #include "ns3/network-module.h"
@@ -27,33 +7,60 @@
 
 namespace ns3 {
 
+#define MAX_AGENTS 10
+
+#pragma pack(push, 1)
 struct sTcpRlEnv
 {
-  uint32_t nodeId;
-  uint32_t socketUid;
-  uint8_t  envType;
+  uint16_t numAgents;
+  uint32_t nodeId[MAX_AGENTS];
+  uint32_t socketUid[MAX_AGENTS];
+  uint8_t  envType[MAX_AGENTS];
   int64_t  simTime_us;
-  uint32_t ssThresh;
-  uint32_t cWnd;
-  uint32_t segmentSize;
-  uint32_t segmentsAcked;
-  uint32_t bytesInFlight;
-  int64_t  rtt_us;
-  double   throughput;
-  uint32_t packetLoss;
-} Packed;
+  uint32_t ssThresh[MAX_AGENTS];
+  uint32_t cWnd[MAX_AGENTS];
+  uint32_t segmentSize[MAX_AGENTS];
+  uint32_t segmentsAcked[MAX_AGENTS];
+  uint32_t bytesInFlight[MAX_AGENTS];
+  int64_t  rtt_us[MAX_AGENTS];
+  double   throughput[MAX_AGENTS];
+  uint32_t packetLoss[MAX_AGENTS];
+};
 
 struct TcpRlAct
 {
-  uint32_t new_ssThresh;
-  uint32_t new_cWnd;
+  uint32_t new_ssThresh[MAX_AGENTS];
+  uint32_t new_cWnd[MAX_AGENTS];
+};
+#pragma pack(pop)
+
+class TcpTimeStepEnv;
+
+class RlCentralController : public Ns3AIRL<sTcpRlEnv, TcpRlAct>
+{
+public:
+  static RlCentralController& Get();
+
+  void Register(TcpTimeStepEnv* env);
+  void Unregister(TcpTimeStepEnv* env);
+  void NotifyGameOver();
+
+private:
+  RlCentralController(uint16_t id);
+  void ScheduleNextStateRead();
+  void SendObsGetAction();
+
+  std::vector<TcpTimeStepEnv*> m_agents;
+  bool m_started{false};
+  Time m_timeStep{MilliSeconds(40)};
 };
 
-class TcpRlEnv : public Ns3AIRL<sTcpRlEnv, TcpRlAct>
+class TcpRlEnv : public SimpleRefCount<TcpRlEnv>
 {
 public:
   TcpRlEnv () = delete;
   TcpRlEnv (uint16_t id);
+  virtual ~TcpRlEnv() {}
   void SetNodeId (uint32_t id);
   void SetSocketUuid (uint32_t id);
   void TxPktTrace (Ptr<const Packet>, const TcpHeader &, Ptr<const TcpSocketBase>);
@@ -80,7 +87,6 @@ protected:
   uint64_t m_interRxTimeNum{0};
   Time     m_interRxTimeSum{MicroSeconds (0.0)};
 
-  // Safe default action values — avoids garbage on first IncreaseWindow call
   uint32_t m_new_ssThresh{65535};
   uint32_t m_new_cWnd{3400};
 };
@@ -90,6 +96,7 @@ class TcpTimeStepEnv : public TcpRlEnv
 public:
   TcpTimeStepEnv () = delete;
   TcpTimeStepEnv (uint16_t id);
+  ~TcpTimeStepEnv ();
 
   virtual uint32_t GetSsThresh (Ptr<const TcpSocketState> tcb, uint32_t bytesInFlight);
   virtual void IncreaseWindow (Ptr<TcpSocketState> tcb, uint32_t segmentsAcked);
@@ -97,31 +104,27 @@ public:
   virtual void CongestionStateSet (Ptr<TcpSocketState> tcb,
                                    const TcpSocketState::TcpCongState_t newState);
   virtual void CwndEvent (Ptr<TcpSocketState> tcb, const TcpSocketState::TcpCAEvent_t event);
+
+  void FillEnvData (sTcpRlEnv* envData, size_t index);
+  void ApplyAction (TcpRlAct* actData, size_t index);
+
 public:
   static double s_bottleneckBps;
 
 private:
-  void ScheduleNextStateRead ();
-
   bool m_started{false};
   Time m_timeStep{MilliSeconds (40)};
-  Ptr<const TcpSocketState> m_tcb{nullptr};
+  Ptr<TcpSocketState> m_tcb{nullptr};
 
   std::vector<uint32_t> m_bytesInFlight;
-  std::vector<uint32_t> m_segmentsAcked;
+  std::vector<uint32_t> m_segmentsAckedTracking;
 
   uint64_t m_rttSampleNum{0};
   Time     m_rttSum{MicroSeconds (0.0)};
   uint32_t m_packetLossCount{0};
 
-  // ── EMA smoothing state ───────────────────────────────────────────────────
-  // Carries forward last-known RTT and throughput across idle 10ms steps
-  // so Python sees meaningful signal instead of 0 on 80% of observations.
-  //
-  // EMA_ALPHA = 0.25: when ACK arrives, blend 25% new + 75% history
-  // EMA_DECAY = 0.85: on idle steps, value = 0.85 * previous (~0 after 25 idle steps = 250ms)
-  double m_smoothedRtt_us{0.0};  // EMA of rtt_us  [microseconds]
-  double m_smoothedTput{0.0};    // EMA of throughput [bytes/sec]
+  double m_smoothedRtt_us{0.0};
+  double m_smoothedTput{0.0};
 };
 
 } // namespace ns3

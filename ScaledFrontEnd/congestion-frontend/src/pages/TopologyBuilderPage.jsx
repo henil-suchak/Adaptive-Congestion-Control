@@ -136,6 +136,14 @@ export default function TopologyBuilderPage() {
     const type = event.dataTransfer.getData('application/reactflow');
     if (!type || !reactFlowInstance) return;
 
+    if (type === 'sender') {
+      const currentSenders = nodes.filter(n => n.type === 'sender').length;
+      if (currentSenders >= 10) {
+        setMessage({ type: 'error', text: 'Maximum limit of 10 senders reached.' });
+        return;
+      }
+    }
+
     const position = reactFlowInstance.screenToFlowPosition({
       x: event.clientX,
       y: event.clientY,
@@ -149,7 +157,7 @@ export default function TopologyBuilderPage() {
       data: { label: labels[type] || type, algorithm: type === 'sender' ? 'SAC' : undefined },
     };
     setNodes((nds) => [...nds, newNode]);
-  }, [reactFlowInstance]);
+  }, [reactFlowInstance, nodes]);
 
   /* ── Delete key handler ─────────────────────────────────────────── */
   const onKeyDown = useCallback((event) => {
@@ -183,7 +191,7 @@ export default function TopologyBuilderPage() {
         topologyType: topoType,
       };
       await TopologyService.create(payload);
-      setMessage({ type: 'success', text: `Topology "${topoName}" saved! ${topoType === 'CUSTOM' ? '⚠️ Custom shapes are not yet supported for simulation (Phase 2).' : ''}` });
+      setMessage({ type: 'success', text: `Topology "${topoName}" saved!` });
     } catch (err) {
       setMessage({ type: 'error', text: err.response?.data || 'Failed to save topology.' });
     } finally {
@@ -239,9 +247,9 @@ export default function TopologyBuilderPage() {
           <span className={`px-2 py-0.5 rounded text-xs font-bold ${
             topoType === 'DUMBBELL'
               ? 'bg-green-100 text-green-700'
-              : 'bg-amber-100 text-amber-700'
+              : 'bg-blue-100 text-blue-700'
           }`}>
-            {topoType === 'DUMBBELL' ? '✅ Dumbbell (Supported)' : '⚠️ Custom (Phase 2)'}
+            {topoType === 'DUMBBELL' ? '✅ Dumbbell (Supported)' : '✅ Custom (Supported)'}
           </span>
         </div>
 
@@ -350,7 +358,7 @@ export default function TopologyBuilderPage() {
                     <div className="flex items-center justify-between">
                       <p className="text-sm font-semibold text-gray-800">{t.name}</p>
                       <span className={`text-xs font-bold px-2 py-0.5 rounded ${
-                        t.topologyType === 'DUMBBELL' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
+                        t.topologyType === 'DUMBBELL' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'
                       }`}>{t.topologyType}</span>
                     </div>
                     <p className="text-xs text-gray-500 mt-1">

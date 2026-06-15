@@ -1,0 +1,298 @@
+{
+  "platform": "Adaptive Congestion Control",
+  "test_date": "2026-06-13T17:01:05Z",
+  "total": 36,
+  "passed": 22,
+  "failed": 14,
+  "stability_score_pct": 61.1,
+  "results": [
+    {
+      "test_id": "B-13",
+      "name": "Valid Topology Persistence and ID Assignment",
+      "status": "PASS",
+      "detail": "Created topology id=9 with 3 nodes and 2 edges",
+      "expected": "",
+      "actual": ""
+    },
+    {
+      "test_id": "B-14",
+      "name": "Malformed JSON Topology Rejected by Backend",
+      "status": "FAIL",
+      "detail": "",
+      "expected": "HTTP 400 rejection",
+      "actual": "HTTP 200 \u2014 backend saved malformed graphJson (stored as raw TEXT, no validation)"
+    },
+    {
+      "test_id": "B-20",
+      "name": "5 Concurrent Topology Creates \u2014 No Race Conditions",
+      "status": "PASS",
+      "detail": "All 5 succeeded with unique IDs: [13, 11, 15, 12, 14]",
+      "expected": "",
+      "actual": ""
+    },
+    {
+      "test_id": "B-21",
+      "name": "Unauthorized Access Returns 403 Forbidden",
+      "status": "PASS",
+      "detail": "No auth token \u2192 HTTP 403",
+      "expected": "",
+      "actual": ""
+    },
+    {
+      "test_id": "B-22",
+      "name": "Cross-User Topology Access Blocked",
+      "status": "FAIL",
+      "detail": "",
+      "expected": "HTTP 403/404",
+      "actual": "HTTP 500"
+    },
+    {
+      "test_id": "C-25",
+      "name": "Sidecar FastAPI Health Check \u2014 Non-Blocking",
+      "status": "FAIL",
+      "detail": "",
+      "expected": "HTTP 200",
+      "actual": "Connection refused \u2014 sidecar unreachable on port 8000"
+    },
+    {
+      "test_id": "C-27",
+      "name": "Invalid Model Path Rejected by Sidecar",
+      "status": "FAIL",
+      "detail": "",
+      "expected": "",
+      "actual": "Sidecar unreachable on port 8000"
+    },
+    {
+      "test_id": "C-31",
+      "name": "Sidecar Has Status/Busy Lock Endpoint",
+      "status": "FAIL",
+      "detail": "",
+      "expected": "",
+      "actual": "Sidecar unreachable"
+    },
+    {
+      "test_id": "D-37",
+      "name": "IPv4 Subnet Allocation Uses Ipv4AddressHelper + nlohmann/json",
+      "status": "PASS",
+      "detail": "sim.cc contains Ipv4AddressHelper=True, nlohmann/json=True, subnet increment=False",
+      "expected": "",
+      "actual": ""
+    },
+    {
+      "test_id": "D-36",
+      "name": "TCP Socket Type Assignment (TcpRlTimeBased + TcpCubic) Present",
+      "status": "PASS",
+      "detail": "sim_inference.cc: RlTCP=True, Cubic=True, JSON=True, fallback=True",
+      "expected": "",
+      "actual": ""
+    },
+    {
+      "test_id": "D-42",
+      "name": "Corrupted JSON catch Handler Present in C++",
+      "status": "PASS",
+      "detail": "sim_inference.cc has exception catch=True, fallback=True",
+      "expected": "",
+      "actual": ""
+    },
+    {
+      "test_id": "D-46",
+      "name": "MAX_AGENTS=10 Defined in C++ Header",
+      "status": "PASS",
+      "detail": "MAX_AGENTS constant found in tcp-rl-env header files",
+      "expected": "",
+      "actual": ""
+    },
+    {
+      "test_id": "E-49",
+      "name": "numAgents field in SHM struct",
+      "status": "PASS",
+      "detail": "Keyword 'numAgents' found in source",
+      "expected": "",
+      "actual": ""
+    },
+    {
+      "test_id": "E-50",
+      "name": "cWnd array in SHM struct",
+      "status": "PASS",
+      "detail": "Keyword 'cWnd[' found in source",
+      "expected": "",
+      "actual": ""
+    },
+    {
+      "test_id": "E-51",
+      "name": "MAX_AGENTS bounds truncation",
+      "status": "PASS",
+      "detail": "Keyword 'min' found in source",
+      "expected": "",
+      "actual": ""
+    },
+    {
+      "test_id": "E-55",
+      "name": "NotifyGameOver present",
+      "status": "PASS",
+      "detail": "Keyword 'NotifyGameOver' found in source",
+      "expected": "",
+      "actual": ""
+    },
+    {
+      "test_id": "E-57",
+      "name": "cWnd capping logic",
+      "status": "PASS",
+      "detail": "Keyword 'cwndCap' found in source",
+      "expected": "",
+      "actual": ""
+    },
+    {
+      "test_id": "E-59",
+      "name": "Unregister on socket close",
+      "status": "PASS",
+      "detail": "Keyword 'Unregister' found in source",
+      "expected": "",
+      "actual": ""
+    },
+    {
+      "test_id": "F-61",
+      "name": "model.save() call present",
+      "status": "FAIL",
+      "detail": "",
+      "expected": "",
+      "actual": "[Errno 2] No such file or directory: '/Users/suchak/Adaptive-Congestion-Control/ns3_files/sim_server/train/train_sac.py'"
+    },
+    {
+      "test_id": "F-62",
+      "name": "observation_space Box defined",
+      "status": "FAIL",
+      "detail": "",
+      "expected": "'observation_space' in Python script",
+      "actual": "Script file not found"
+    },
+    {
+      "test_id": "F-63",
+      "name": "action_space Box defined",
+      "status": "FAIL",
+      "detail": "",
+      "expected": "'action_space' in Python script",
+      "actual": "Script file not found"
+    },
+    {
+      "test_id": "F-64",
+      "name": "compute_reward / reward function",
+      "status": "FAIL",
+      "detail": "",
+      "expected": "'reward' in Python script",
+      "actual": "Script file not found"
+    },
+    {
+      "test_id": "F-66",
+      "name": "TensorboardCallback / tb_log",
+      "status": "FAIL",
+      "detail": "",
+      "expected": "",
+      "actual": "[Errno 2] No such file or directory: '/Users/suchak/Adaptive-Congestion-Control/ns3_files/sim_server/train/train_sac.py'"
+    },
+    {
+      "test_id": "F-69",
+      "name": "env.reset() defined",
+      "status": "FAIL",
+      "detail": "",
+      "expected": "'def reset' in Python script",
+      "actual": "Script file not found"
+    },
+    {
+      "test_id": "F-70",
+      "name": "learning_rate CLI arg",
+      "status": "FAIL",
+      "detail": "",
+      "expected": "",
+      "actual": "[Errno 2] No such file or directory: '/Users/suchak/Adaptive-Congestion-Control/ns3_files/sim_server/train/train_sac.py'"
+    },
+    {
+      "test_id": "G-71",
+      "name": "WebSocket Payload Contains All Required Schema Fields",
+      "status": "FAIL",
+      "detail": "{'throughputMbps': True, 'rttMs': True, 'cWnd': False, 'lossRate': False, 'experimentId': True}",
+      "expected": "All fields present",
+      "actual": "Missing: ['cWnd', 'lossRate']"
+    },
+    {
+      "test_id": "G-80",
+      "name": "Rolling 50-Entry MetricsData Buffer Cap in Frontend",
+      "status": "PASS",
+      "detail": "InferenceArenaPage.jsx enforces 50-message rolling window",
+      "expected": "",
+      "actual": ""
+    },
+    {
+      "test_id": "A-02",
+      "name": "10 Sender Limit Enforced",
+      "status": "PASS",
+      "detail": "Keywords ('currentSenders >= 10', 'Maximum limit')",
+      "expected": "All keywords present in TopologyBuilderPage.jsx",
+      "actual": "All present"
+    },
+    {
+      "test_id": "A-03",
+      "name": "Edge Defaults (10Mbps, 20ms)",
+      "status": "PASS",
+      "detail": "Keywords ('bandwidthMbps: 10', 'delayMs: 20')",
+      "expected": "All keywords present in TopologyBuilderPage.jsx",
+      "actual": "All present"
+    },
+    {
+      "test_id": "A-06",
+      "name": "Empty Name Validation",
+      "status": "PASS",
+      "detail": "Keywords ('topoName.trim()', 'Please enter a topology name')",
+      "expected": "All keywords present in TopologyBuilderPage.jsx",
+      "actual": "All present"
+    },
+    {
+      "test_id": "A-08",
+      "name": "Auto Layout Reset",
+      "status": "PASS",
+      "detail": "Keywords ('defaultNodes', 'defaultEdges')",
+      "expected": "All keywords present in TopologyBuilderPage.jsx",
+      "actual": "All present"
+    },
+    {
+      "test_id": "A-11",
+      "name": "MiniMap Color Mapping",
+      "status": "PASS",
+      "detail": "Keywords ('#10b981', '#6366f1')",
+      "expected": "All keywords present in TopologyBuilderPage.jsx",
+      "actual": "All present"
+    },
+    {
+      "test_id": "A-12",
+      "name": "BDP Calculation",
+      "status": "PASS",
+      "detail": "Keywords ('bdpBytes', 'bottleneckBw')",
+      "expected": "All keywords present in TopologyBuilderPage.jsx",
+      "actual": "All present"
+    },
+    {
+      "test_id": "H-84",
+      "name": "WebSocket STOMP Reconnect Delay Configured",
+      "status": "PASS",
+      "detail": "",
+      "expected": "reconnectDelay in stompClient config",
+      "actual": "Present"
+    },
+    {
+      "test_id": "I-96",
+      "name": "Unknown queueType Falls Back to Default Queue Disc",
+      "status": "PASS",
+      "detail": "",
+      "expected": "if/else queueType with fallback in sim.cc",
+      "actual": "Fallback branch found"
+    },
+    {
+      "test_id": "I-99",
+      "name": "Negative Bandwidth Rejected by Backend",
+      "status": "FAIL",
+      "detail": "",
+      "expected": "HTTP 400 validation error",
+      "actual": "HTTP 200 \u2014 backend accepted -10 Mbps without validation"
+    }
+  ]
+}

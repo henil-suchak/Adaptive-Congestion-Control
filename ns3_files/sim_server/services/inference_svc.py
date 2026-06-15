@@ -47,7 +47,7 @@ def _shm_cleanup():
 
 
 def _inference_worker(experiment_id, topology, bandwidth, delay, sim_duration, model_name, shm_id,
-                      access_bw=10.0, access_delay=20.0, queue_type="FqCoDel", mtu=400):
+                      access_bw=10.0, access_delay=20.0, queue_type="FqCoDel", mtu=400, graph_json=None):
     """
     Runs in a CHILD PROCESS — the C extension 'shm_pool' has fresh state,
     so Init(shm_id) always creates/attaches correctly.
@@ -78,10 +78,10 @@ def _inference_worker(experiment_id, topology, bandwidth, delay, sim_duration, m
         act_size = ctypes.sizeof(TcpRlInferenceAct)
         print(f"🔬 [Debug] sTcpRlInferenceEnv size: {env_size} bytes", flush=True)
         print(f"🔬 [Debug] TcpRlInferenceAct size:  {act_size} bytes", flush=True)
-        if env_size != 57 or act_size != 8:
+        if env_size != 500 or act_size != 80:
             raise RuntimeError(
                 f"❌ Struct size mismatch! "
-                f"Expected env=57, act=8. Got env={env_size}, act={act_size}"
+                f"Expected env=500, act=80. Got env={env_size}, act={act_size}"
             )
 
         # ── Step 4: Initialize shared memory with DYNAMIC SHM ID ─────────────
@@ -93,99 +93,175 @@ def _inference_worker(experiment_id, topology, bandwidth, delay, sim_duration, m
         model_path = os.path.join(MODEL_DIR, model_name)
         print(f"🧠 [Worker] Loading AI Model: {model_path}...", flush=True)
         model = SAC.load(model_path, device="cpu")
+        
+        # Calculate dynamic normalization bounds based on topology (matches env_wrapper.py)
+        bottleneck_bps = float(bandwidth) * 1_000_000.0
+        access_bps     = float(access_bw) * 1_000_000.0
+        max_bps        = max(bottleneck_bps, access_bps)
+        
         OBS_MAX = np.array([
-            1_400_000.0, 200_000.0, 250_000.0,
-            100.0, 1_500.0, 1_400_000.0
+            max_bps * 0.1,  # cWnd max (bytes)
+            500_000.0,      # RTT max (us)
+            max_bps / 8.0,  # Throughput max (bytes/sec)
+            100.0,          # Packet loss max
+            1_500.0,        # Segment size max
+            max_bps * 0.1   # Bytes in flight max
         ], dtype=np.float32)
+        
         print("✅ [Worker] AI Model loaded successfully.", flush=True)
 
         # ── Step 6: Start telemetry sender (Queue + WebSocket) ────────────────
         sender.start()
 
+        # ── Fast Fail for Non-RL Topologies ──────────────────────────
+        if graph_json and '"algorithm":"SAC"' not in graph_json.replace(" ", ""):
+            print("⚠️ [Worker] No SAC Agent found in topology! Inference requires an SAC Agent.", flush=True)
+            print("🏁 [Worker] C++ signaled simulation end.", flush=True)
+            _inference_state.update({"busy": False, "status": "failed"})
+            return
+
         # ── Step 7: Launch C++ binary (with dynamic SHM ID) ───────────────────
         print("🚀 [Worker] Launching NS-3 binary...", flush=True)
-        start_cpp_binary(
+        process = start_cpp_binary(
             experiment_id, shm_id=shm_id,
             bottleneck_bw=f"{bandwidth}Mbps",
             bottleneck_delay=f"{delay}ms",
             access_bw=f"{access_bw}Mbps",
             access_delay=f"{access_delay}ms",
-            mtu=mtu
+            mtu=mtu,
+            sim_duration=sim_duration,
+            graph_json=graph_json,
+            return_process=True
         )
 
-        # ── Step 8: Inference loop ────────────────────────────────────────────
-        print("📈 [Worker] Entering inference loop (waiting for C++)...", flush=True)
-        step_counter = 0
+        # ── Step 8: Inference loop in a separate process ──────────────────────
+        print("📈 [Worker] Launching inference loop process...", flush=True)
+        
+        def _run_agent_loop(shm_id, model_path, obs_max):
+            import numpy as np
+            from py_interface import Ns3AIRL
+            from stable_baselines3 import SAC
+            import time
+            
+            # Re-load model in subprocess
+            try:
+                model = SAC.load(model_path, device="cpu")
+                agent = Ns3AIRL(shm_id, Env=500, Act=80)
+                
+                while True:
+                    with agent as data:
+                        if data is None or agent.isFinish():
+                            break
+                        
+                        num_agents = data.env.numAgents
+                        if num_agents == 0:
+                            continue
+                            
+                        obs_shape = model.observation_space.shape[0]
+                        if obs_shape == 60:
+                            flat_obs = np.zeros(60, dtype=np.float32)
+                            for i in range(10):
+                                if i < num_agents:
+                                    seg_size = max(data.env.segmentSize[i], 340)
+                                    raw_obs = np.array([
+                                        data.env.cWnd[i], data.env.rtt_us[i], data.env.throughput[i],
+                                        data.env.packetLoss[i], seg_size, data.env.bytesInFlight[i]
+                                    ], dtype=np.float32)
+                                    flat_obs[i*6:(i+1)*6] = np.clip(raw_obs / obs_max, 0.0, 1.0)
+                            actions, _ = model.predict(flat_obs, deterministic=True)
+                            for i in range(10):
+                                if i < num_agents:
+                                    data.act.new_cWnd[i] = max(1, int(actions[i] * 10000))
+                        else:
+                            for i in range(num_agents):
+                                seg_size = max(data.env.segmentSize[i], 340)
+                                raw_obs = np.array([
+                                    data.env.cWnd[i], data.env.rtt_us[i], data.env.throughput[i],
+                                    data.env.packetLoss[i], seg_size, data.env.bytesInFlight[i]
+                                ], dtype=np.float32)
+                                norm_obs = np.clip(raw_obs / obs_max, 0.0, 1.0)
+                                action, _ = model.predict(norm_obs, deterministic=True)
+                                data.act.new_cWnd[i] = max(1, int(action[0] * 10000))
+            except Exception as e:
+                print(f"⚠️ [InferenceLoop] Crashed: {e}", flush=True)
 
-        while True:
-            with agent as data:
-                if data is None or agent.isFinish():
-                    print("🏁 [Worker] C++ signaled simulation end.", flush=True)
+        import multiprocessing
+        loop_proc = multiprocessing.Process(target=_run_agent_loop, args=(shm_id, model_path, OBS_MAX))
+        loop_proc.start()
+
+        # ── Step 9: Monitor both processes ─────────────────────────────────────
+        try:
+            while loop_proc.is_alive() and process.poll() is None:
+                if not _inference_state["busy"]:
+                    print("🛑 [Inference] Stop signal received.", flush=True)
                     break
-
-                step_counter += 1
-
-                # Read observation
-                cWnd     = data.env.cWnd
-                seg_size = max(data.env.segmentSize, 340)
-
-                raw_obs = np.array([
-                    cWnd,
-                    data.env.rtt_us,
-                    data.env.throughput,
-                    data.env.packetLoss,
-                    seg_size,
-                    data.env.bytesInFlight
-                ], dtype=np.float32)
-
-                # Normalize and predict
-                normalized_obs = np.clip(raw_obs / OBS_MAX, 0.0, 1.0)
-                action, _ = model.predict(normalized_obs, deterministic=True)
-
-                # Compute new cWnd and ssThresh
-                factor   = float(np.clip(action[0], 0.8, 1.2))
-                MAX_CWND = seg_size * 1000
-                new_cWnd = int(np.clip(cWnd * factor, seg_size, MAX_CWND))
-
-                if factor < 1.0:
-                    new_ssThresh = int(new_cWnd * 0.75)
+                            ], dtype=np.float32)
+                            flat_obs[i*6:(i+1)*6] = np.clip(raw_obs / OBS_MAX, 0.0, 1.0)
+                    
+                    actions, _ = model.predict(flat_obs, deterministic=True)
+                    
+                    for i in range(num_agents):
+                        seg_size = max(data.env.segmentSize[i], 340)
+                        
+                        act_low = float(model.action_space.low[0]) if hasattr(model.action_space, 'low') else 0.5
+                        act_high = float(model.action_space.high[0]) if hasattr(model.action_space, 'high') else 2.0
+                        factor = float(np.clip(actions[i], act_low, act_high))
+                        
+                        MAX_CWND = seg_size * 1000
+                        new_cWnd = int(np.clip(data.env.cWnd[i] * factor, seg_size, MAX_CWND))
+                        new_ssThresh = int(new_cWnd * 0.75) if factor < 1.0 else min(int(new_cWnd * 2), MAX_CWND * 2)
+                        data.act.new_cWnd[i] = new_cWnd
+                        data.act.new_ssThresh[i] = new_ssThresh
+                        
                 else:
-                    new_ssThresh = min(int(new_cWnd * 2), MAX_CWND * 2)
-
-                # Write action
-                data.act.new_cWnd     = new_cWnd
-                data.act.new_ssThresh = new_ssThresh
+                    # LEGACY Single-agent model (expects 6 features, returns 1 action)
+                    for i in range(num_agents):
+                        cWnd = data.env.cWnd[i]
+                        seg_size = max(data.env.segmentSize[i], 340)
+                        raw_obs = np.array([
+                            cWnd, data.env.rtt_us[i], data.env.throughput[i],
+                            data.env.packetLoss[i], seg_size, data.env.bytesInFlight[i]
+                        ], dtype=np.float32)
+                        normalized_obs = np.clip(raw_obs / OBS_MAX, 0.0, 1.0)
+                        action, _ = model.predict(normalized_obs, deterministic=True)
+                        
+                        act_low = float(model.action_space.low[0]) if hasattr(model.action_space, 'low') else 0.5
+                        act_high = float(model.action_space.high[0]) if hasattr(model.action_space, 'high') else 2.0
+                        raw_factor = action[0] if isinstance(action, np.ndarray) else action
+                        factor = float(np.clip(raw_factor, act_low, act_high))
+                        
+                        MAX_CWND = seg_size * 1000
+                        new_cWnd = int(np.clip(cWnd * factor, seg_size, MAX_CWND))
+                        new_ssThresh = int(new_cWnd * 0.75) if factor < 1.0 else min(int(new_cWnd * 2), MAX_CWND * 2)
+                        data.act.new_cWnd[i] = new_cWnd
+                        data.act.new_ssThresh[i] = new_ssThresh
 
                 # Debug first 3 steps
                 if step_counter <= 3:
-                    print(
-                        f"✅ [Step {step_counter}] "
-                        f"cWnd={cWnd}→{new_cWnd}, "
-                        f"ssThresh={new_ssThresh}, "
-                        f"rtt={data.env.rtt_us}µs, "
-                        f"tput={data.env.throughput:.0f}B/s",
-                        flush=True
-                    )
+                    print(f"   [Step {step_counter}] num_agents={num_agents} cWnd[0]={data.env.cWnd[0]} -> new_cWnd[0]={data.act.new_cWnd[0]}", flush=True)
 
-                # Telemetry every 20 steps
                 if step_counter % 20 == 0:
+                    sim_time_sec = round(step_counter * 0.040, 3)
                     payload = {
                         "experimentId":   experiment_id,
-                        "cwndBytes":      float(cWnd),
-                        "rttMs":          float(data.env.rtt_us / 1000.0),
-                        "throughputMbps": float((data.env.throughput * 8) / 1_000_000.0),
-                        "packetLossRate": float(data.env.packetLoss)
+                        "cwndBytes":      float(data.env.cWnd[0]),
+                        "ssThresh":       float(data.act.new_ssThresh[0]),
+                        "rttMs":          float(data.env.rtt_us[0] / 1000.0),
+                        "throughputMbps": float((data.env.throughput[0] * 8) / 1_000_000.0),
+                        "packetLossRate": float(data.env.packetLoss[0]),
+                        "simTimeSec":     sim_time_sec
                     }
                     print(
                         f"📊 [Step {step_counter}] TELEMETRY → backend  "
                         f"expId={payload['experimentId']}  "
                         f"cwnd={payload['cwndBytes']:.0f}B  "
+                        f"ssThresh={payload['ssThresh']:.0f}  "
                         f"rtt={payload['rttMs']:.2f}ms  "
                         f"tput={payload['throughputMbps']:.4f}Mbps  "
-                        f"loss={payload['packetLossRate']:.0f}",
+                        f"loss={payload['packetLossRate']:.0f}  "
+                        f"simTime={sim_time_sec:.1f}s",
                         flush=True
                     )
-                    # Drop into queue — sender thread handles WebSocket delivery
                     sender.enqueue(payload)
 
         print(f"🏁 [Worker] Experiment {experiment_id} finished cleanly!", flush=True)
@@ -234,6 +310,7 @@ def run_inference_loop(req: SimulationRequest):
             req.accessDelayMs,
             req.queueType,
             req.mtu,
+            req.graphJson,
         ),
         daemon=True,
     )

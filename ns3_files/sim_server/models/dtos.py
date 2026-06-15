@@ -3,6 +3,7 @@ from pydantic import BaseModel
 class SimulationRequest(BaseModel):
     experimentId: int
     topology: str
+    graphJson: str = None
     bandwidthMbps: float
     delayMs: float
     accessBandwidthMbps: float = 10.0
@@ -18,6 +19,8 @@ class TrainingRequest(BaseModel):
     totalTimesteps: int
     learningRate: float = 3e-4
     networkArch: str = "256,256,128"
+    rewardProfile: str = "BALANCED"
+    graphJson: str = None
     bandwidthMbps: float = 2.0
     delayMs: float = 20.0
     accessBandwidthMbps: float = 10.0

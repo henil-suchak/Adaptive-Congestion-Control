@@ -50,8 +50,8 @@ public class FlowMetricServiceImpl implements FlowMetricService {
 
         Experiment experiment = flow.getExperiment();
 
-        if (experiment.getStatus() != ExperimentStatus.RUNNING) {
-            throw new IllegalArgumentException("Experiment is not in running state");
+        if (experiment.getStatus() == ExperimentStatus.COMPLETED) {
+            throw new IllegalArgumentException("Experiment is already completed, cannot accept new metrics");
         }
 
         // ✅ Save metric
