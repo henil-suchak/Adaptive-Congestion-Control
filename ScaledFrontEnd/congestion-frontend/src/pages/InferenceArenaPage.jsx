@@ -378,7 +378,7 @@ export default function InferenceArenaPage() {
 
       {/* The Dashboard Canvas */}
       <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-        <h2 className="text-xl font-semibold mb-6">Real-Time Throughput (Mbps)</h2>
+        <h2 className="text-xl font-semibold mb-6">Real-Time Throughput & RTT</h2>
         
         <div className="h-96 w-full">
           <ResponsiveContainer width="100%" height="100%">
@@ -393,16 +393,27 @@ export default function InferenceArenaPage() {
                      }} 
               />
               
-              <YAxis domain={['auto', 'auto']} />
+              <YAxis yAxisId="left" orientation="left" stroke="#0f172a" domain={['auto', 'auto']} />
+              <YAxis yAxisId="right" orientation="right" stroke="#10b981" domain={['auto', 'auto']} />
               <Tooltip />
               <Legend />
               
-              <Line type="monotone" 
+              <Line yAxisId="left"
+                    type="monotone" 
                     dataKey="throughputMbps" 
                     stroke="#0f172a" 
                     strokeWidth={3} 
                     dot={false} 
                     name="Throughput (Mbps)" 
+                    isAnimationActive={false} 
+              />
+              <Line yAxisId="right"
+                    type="monotone" 
+                    dataKey="rttMs" 
+                    stroke="#10b981" 
+                    strokeWidth={3} 
+                    dot={false} 
+                    name="RTT (ms)" 
                     isAnimationActive={false} 
               />
             </LineChart>
