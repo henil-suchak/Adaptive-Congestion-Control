@@ -94,18 +94,27 @@ def _inference_worker(experiment_id, topology, bandwidth, delay, sim_duration, m
         print(f"🧠 [Worker] Loading AI Model: {model_path}...", flush=True)
         model = SAC.load(model_path, device="cpu")
         
-        # Calculate dynamic normalization bounds based on topology (matches env_wrapper.py)
+        # Calculate dynamic normalization bounds based on topology (MUST MATCH env_wrapper.py EXACTLY)
         bottleneck_bps = float(bandwidth) * 1_000_000.0
         access_bps     = float(access_bw) * 1_000_000.0
-        max_bps        = max(bottleneck_bps, access_bps)
+        bottle_delay_s = float(delay) / 1000.0
+        access_delay_s = float(access_delay) / 1000.0
+
+        TMAX = bottleneck_bps / 8.0
+        RTT_MIN_S = 2.0 * (bottle_delay_s + 2.0 * access_delay_s)
+        RTT_MIN_US = RTT_MIN_S * 1_000_000.0
+        BDP_BYTES = TMAX * RTT_MIN_S
+
+        MAX_CWND_BYTES = max(BDP_BYTES * 5.0, 1500.0 * 100.0)
+        MAX_RTT_US = max(RTT_MIN_US * 10.0, 200_000.0)
         
         OBS_MAX = np.array([
-            max_bps * 0.1,  # cWnd max (bytes)
-            500_000.0,      # RTT max (us)
-            max_bps / 8.0,  # Throughput max (bytes/sec)
-            100.0,          # Packet loss max
-            1_500.0,        # Segment size max
-            max_bps * 0.1   # Bytes in flight max
+            MAX_CWND_BYTES,  # cWnd max (bytes)
+            MAX_RTT_US,      # RTT max (us)
+            TMAX * 2.0,      # Throughput max (bytes/sec)
+            100.0,           # Packet loss max
+            1_500.0,         # Segment size max
+            MAX_CWND_BYTES   # Bytes in flight max
         ], dtype=np.float32)
         
         print("✅ [Worker] AI Model loaded successfully.", flush=True)
@@ -117,7 +126,6 @@ def _inference_worker(experiment_id, topology, bandwidth, delay, sim_duration, m
         if graph_json and '"algorithm":"SAC"' not in graph_json.replace(" ", ""):
             print("⚠️ [Worker] No SAC Agent found in topology! Inference requires an SAC Agent.", flush=True)
             print("🏁 [Worker] C++ signaled simulation end.", flush=True)
-            _inference_state.update({"busy": False, "status": "failed"})
             return
 
         # ── Step 7: Launch C++ binary (with dynamic SHM ID) ───────────────────
@@ -134,67 +142,35 @@ def _inference_worker(experiment_id, topology, bandwidth, delay, sim_duration, m
             return_process=True
         )
 
-        # ── Step 8: Inference loop in a separate process ──────────────────────
-        print("📈 [Worker] Launching inference loop process...", flush=True)
-        
-        def _run_agent_loop(shm_id, model_path, obs_max):
-            import numpy as np
-            from py_interface import Ns3AIRL
-            from stable_baselines3 import SAC
-            import time
-            
-            # Re-load model in subprocess
-            try:
-                model = SAC.load(model_path, device="cpu")
-                agent = Ns3AIRL(shm_id, Env=500, Act=80)
-                
-                while True:
-                    with agent as data:
-                        if data is None or agent.isFinish():
-                            break
-                        
-                        num_agents = data.env.numAgents
-                        if num_agents == 0:
-                            continue
-                            
-                        obs_shape = model.observation_space.shape[0]
-                        if obs_shape == 60:
-                            flat_obs = np.zeros(60, dtype=np.float32)
-                            for i in range(10):
-                                if i < num_agents:
-                                    seg_size = max(data.env.segmentSize[i], 340)
-                                    raw_obs = np.array([
-                                        data.env.cWnd[i], data.env.rtt_us[i], data.env.throughput[i],
-                                        data.env.packetLoss[i], seg_size, data.env.bytesInFlight[i]
-                                    ], dtype=np.float32)
-                                    flat_obs[i*6:(i+1)*6] = np.clip(raw_obs / obs_max, 0.0, 1.0)
-                            actions, _ = model.predict(flat_obs, deterministic=True)
-                            for i in range(10):
-                                if i < num_agents:
-                                    data.act.new_cWnd[i] = max(1, int(actions[i] * 10000))
-                        else:
-                            for i in range(num_agents):
-                                seg_size = max(data.env.segmentSize[i], 340)
-                                raw_obs = np.array([
-                                    data.env.cWnd[i], data.env.rtt_us[i], data.env.throughput[i],
-                                    data.env.packetLoss[i], seg_size, data.env.bytesInFlight[i]
-                                ], dtype=np.float32)
-                                norm_obs = np.clip(raw_obs / obs_max, 0.0, 1.0)
-                                action, _ = model.predict(norm_obs, deterministic=True)
-                                data.act.new_cWnd[i] = max(1, int(action[0] * 10000))
-            except Exception as e:
-                print(f"⚠️ [InferenceLoop] Crashed: {e}", flush=True)
+        # ── Step 8: Inference loop ─────────────────────────────────────────────
+        step_counter = 0
+        print("📈 [Worker] Starting inference loop...", flush=True)
 
-        import multiprocessing
-        loop_proc = multiprocessing.Process(target=_run_agent_loop, args=(shm_id, model_path, OBS_MAX))
-        loop_proc.start()
+        while True:
+            # Check for C++ process death (parent kills this worker on stop)
+            if process.poll() is not None:
+                print("🏁 [Worker] C++ process ended.", flush=True)
+                break
 
-        # ── Step 9: Monitor both processes ─────────────────────────────────────
-        try:
-            while loop_proc.is_alive() and process.poll() is None:
-                if not _inference_state["busy"]:
-                    print("🛑 [Inference] Stop signal received.", flush=True)
+            with agent as data:
+                if data is None or agent.isFinish():
                     break
+
+                step_counter += 1
+                num_agents = data.env.numAgents
+                if num_agents == 0:
+                    continue
+
+                obs_shape = model.observation_space.shape[0] if hasattr(model.observation_space, 'shape') else 6
+                
+                if obs_shape >= 60:
+                    flat_obs = np.zeros(60, dtype=np.float32)
+                    for i in range(10):
+                        if i < num_agents:
+                            seg_size = max(data.env.segmentSize[i], 340)
+                            raw_obs = np.array([
+                                data.env.cWnd[i], data.env.rtt_us[i], data.env.throughput[i],
+                                data.env.packetLoss[i], seg_size, data.env.bytesInFlight[i]
                             ], dtype=np.float32)
                             flat_obs[i*6:(i+1)*6] = np.clip(raw_obs / OBS_MAX, 0.0, 1.0)
                     
@@ -207,8 +183,13 @@ def _inference_worker(experiment_id, topology, bandwidth, delay, sim_duration, m
                         act_high = float(model.action_space.high[0]) if hasattr(model.action_space, 'high') else 2.0
                         factor = float(np.clip(actions[i], act_low, act_high))
                         
+                        # Add a small heuristic boost if we are stuck at minimum window with a "keep" factor
+                        cWnd = data.env.cWnd[i]
+                        if cWnd <= seg_size and factor >= 1.0:
+                            factor = max(factor, 1.5) # Force jump out of the 1-segment trap
+                            
                         MAX_CWND = seg_size * 1000
-                        new_cWnd = int(np.clip(data.env.cWnd[i] * factor, seg_size, MAX_CWND))
+                        new_cWnd = int(np.clip(cWnd * factor, seg_size, MAX_CWND))
                         new_ssThresh = int(new_cWnd * 0.75) if factor < 1.0 else min(int(new_cWnd * 2), MAX_CWND * 2)
                         data.act.new_cWnd[i] = new_cWnd
                         data.act.new_ssThresh[i] = new_ssThresh
@@ -230,6 +211,9 @@ def _inference_worker(experiment_id, topology, bandwidth, delay, sim_duration, m
                         raw_factor = action[0] if isinstance(action, np.ndarray) else action
                         factor = float(np.clip(raw_factor, act_low, act_high))
                         
+                        if cWnd <= seg_size and factor >= 1.0:
+                            factor = max(factor, 1.5)
+                            
                         MAX_CWND = seg_size * 1000
                         new_cWnd = int(np.clip(cWnd * factor, seg_size, MAX_CWND))
                         new_ssThresh = int(new_cWnd * 0.75) if factor < 1.0 else min(int(new_cWnd * 2), MAX_CWND * 2)
