@@ -1,287 +1,139 @@
+# Adaptive Congestion Control via Deep Reinforcement Learning
 
-# Adaptive TCP Congestion Control using Deep Reinforcement Learning
+> [!NOTE]
+> This project implements a state-of-the-art Deep Reinforcement Learning agent to dynamically manage TCP congestion control, supplanting traditional heuristic algorithms.
 
-A research project that uses a **Soft Actor-Critic (SAC)** reinforcement learning agent to dynamically control TCP congestion window size, trained and evaluated using **ns-3** network simulation. Includes a **Spring Boot** backend for data persistence and a **React** dashboard for real-time visualization.
+## 1. Introduction
 
-## Architecture
+This project replaces hardcoded, heuristic TCP congestion control algorithms with an intelligent, adaptive machine learning agent. Traditional algorithms like TCP Reno and CUBIC rely on static rules to govern packet flow, reacting poorly to modern, volatile network conditions by either severely underutilizing bandwidth or drastically inflating buffer queues. By integrating a Reinforcement Learning (RL) agent, the system dynamically calculates the optimal Congestion Window (cWnd) and Slow Start Threshold (ssThresh) in real-time, proactively adapting to network conditions to maximize throughput and minimize Round Trip Time (RTT). This predictive capability ensures the network operates near the Bandwidth-Delay Product (BDP) ceiling without incurring packet drops, a significant leap beyond legacy reactive models that inherently rely on packet loss as a primary congestion signal.
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        React Dashboard                         │
-│                  (Recharts + STOMP WebSocket)                  │
-│                     http://localhost:3000                       │
-└──────────────────────────┬──────────────────────────────────────┘
-                           │  WebSocket /ws + REST /api
-┌──────────────────────────▼──────────────────────────────────────┐
-│                   Spring Boot Backend                          │
-│          (JPA + H2/PostgreSQL + WebSocket)                     │
-│                     http://localhost:8080                       │
-└──────────────────────────▲──────────────────────────────────────┘
-                           │  HTTP POST /api/flows/{id}/metrics
-┌──────────────────────────┴──────────────────────────────────────┐
-│              Python Inference Script                            │
-│     (stable_baselines3 SAC model + inference_wrapper)          │
-└──────────────────────────▲──────────────────────────────────────┘
-                           │  Shared Memory (SysV shmget/shmat)
-┌──────────────────────────┴──────────────────────────────────────┐
-│              ns-3.35 Network Simulation                        │
-│      (C++ — dumbbell topology, FqCoDel queue)                  │
-└─────────────────────────────────────────────────────────────────┘
-```
+## 2. System Architecture
 
-## Tech Stack
+The architecture relies on a multi-language distributed stack to seamlessly bridge the user interface down to low-level network physics. By cleanly decoupling the presentation, orchestration, AI prediction, and simulation layers, the system achieves sub-millisecond latency for AI inference while preserving a robust, responsive web interface. The core pipeline spans from a React frontend, routing through a Java Spring Boot orchestrator, descending into Python FastAPI sidecars, and ultimately binding to a C++ network simulation core via Shared Memory.
 
-| Component | Technology |
-|-----------|-----------|
-| Backend | Spring Boot 3.2, Maven, JPA/Hibernate, H2 (dev) / PostgreSQL (prod) |
-| Frontend | React 19, Recharts, STOMP WebSocket, Tailwind CSS |
-| Simulation | ns-3.35 (C++), Python 3.9, stable_baselines3, NumPy |
-| RL Agent | SAC (Soft Actor-Critic), trained for 1.5M steps |
+```mermaid
+graph TD
+    %% Frontend Layer
+    subgraph Frontend["React Web UI"]
+        UI_Canvas["React Flow Canvas (Topology)"]
+        UI_Graphs["Recharts 60fps Telemetry"]
+        UI_Controls["Hyperparameter Tuning UI"]
+    end
 
-## Prerequisites
+    %% Orchestration Layer
+    subgraph Backend["Java Spring Boot Orchestrator"]
+        API_Gateway["REST API & WebSocket Manager"]
+        DB[(PostgreSQL)]
+        Queue[(Redis Job Queue)]
+    end
 
-### macOS / Linux
+    %% Simulation & AI Layer (Docker)
+    subgraph Engine["Python FastAPI & NS-3 Sidecar (Docker)"]
+        FastAPI["FastAPI Sidecar Router"]
+        RL_Agent["Python SAC Agent (Stable-Baselines3)"]
+        SHM[/"POSIX Linux Shared Memory (1MB RAM)"/]
+        NS3["NS-3 C++ Engine (sim.cc)"]
+    end
 
-| Tool | Version | Install |
-|------|---------|---------|
-| Java JDK | 17+ | `brew install openjdk@17` |
-| Maven | 3.8+ | `brew install maven` |
-| Node.js | 18+ | `brew install node` |
-| Python | 3.9+ | `brew install python@3.9` |
-| GCC/Clang | Any recent | `xcode-select --install` (macOS) |
-
-### Windows
-
-> **Important:** ns-3 does **NOT** run on native Windows.
-
-- **Backend & Frontend**: Run natively — install Java 17, Maven, Node.js
-- **ns-3 Simulation**: Install **WSL2** with Ubuntu 22.04 (see [Windows Setup](#windows-specific-setup))
-
-## Repository Structure
-
-```
-CongestionControl/
-├── pom.xml                          ← Maven build (Spring Boot backend)
-├── src/                             ← Spring Boot backend source
-│   └── main/
-│       ├── java/com/HAJ/congestion/
-│       │   ├── Main.java            ← Application entry point
-│       │   ├── config/              ← WebSocket configuration
-│       │   ├── controller/          ← REST API controllers
-│       │   ├── entity/              ← JPA entities
-│       │   ├── repository/          ← Spring Data repositories
-│       │   ├── service/             ← Business logic interfaces
-│       │   │   └── implementation/  ← Service implementations
-│       │   ├── DTO/                 ← Data transfer objects
-│       │   └── ML/                  ← ML prediction service
-│       └── resources/
-│           ├── application.yml      ← Active config (H2)
-│           └── application.yml.example  ← Template config
-├── frontend/                        ← React dashboard
-│   ├── package.json
-│   ├── src/
-│   │   ├── components/              ← Dashboard UI components
-│   │   └── hooks/                   ← Custom React hooks
-│   └── tailwind.config.js
-├── ns3_files/                       ← Simulation source files (portable)
-│   ├── INSTALL.md                   ← Setup instructions
-│   ├── scratch/rl-tcp-inference/    ← C++ inference simulation
-│   └── contrib/ns3-ai/
-│       ├── py_interface/            ← Python ↔ ns-3 shared memory
-│       └── examples/rl-tcp/
-│           ├── inference/           ← Python inference scripts
-│           ├── checkpoints/         ← Trained SAC model (1.5M steps)
-│           ├── train_sac.py         ← Training script
-│           └── *.cc, *.h            ← Training env source
-└── .gitignore
+    %% Connections
+    UI_Canvas -->|JSON Topologies| API_Gateway
+    UI_Controls -->|JSON Tuning| API_Gateway
+    API_Gateway <--> DB
+    API_Gateway -->|Dispatch Job| Queue
+    Queue -->|Consume Job| FastAPI
+    
+    FastAPI -->|subprocess.Popen| RL_Agent
+    FastAPI -->|subprocess.Popen| NS3
+    
+    RL_Agent -->|Writes cWnd Action| SHM
+    SHM -->|Reads cWnd Action| NS3
+    NS3 -->|Writes Tput/RTT State| SHM
+    SHM -->|Reads State| RL_Agent
+    
+    FastAPI -.->|Regex stdout parsing| RL_Agent
+    FastAPI -->|SockJS/STOMP Stream| UI_Graphs
+    
+    UI_Controls -.->|User Stops| FastAPI
+    FastAPI -.->|.stop_training file| RL_Agent
 ```
 
-## Setup Instructions
+### The Frontend Interface
+The user interface provides a drag-and-drop canvas for building networks and viewing real-time AI performance metrics. Built with React and React Flow, the visual topology builder allows users to dynamically construct custom network graphs featuring distinct sender nodes, router configurations, and receiver endpoints while configuring individual link speeds. Upon execution, the UI establishes a SockJS and STOMP WebSocket connection to consume continuous telemetry streams, utilizing Recharts to render beautiful, 60fps visual graphs of the AI's current RTT, Throughput, and Episode Reward averages. Additionally, the interface surfaces hyperparameter tuning sliders that dynamically alter the AI's Learning Rate, Network Architecture, and simulation Timesteps, packaging these adjustments into a JSON payload that is transmitted all the way down into the isolated Python training process.
 
-### 1. Backend (Spring Boot)
+### The Backend Orchestrator
+A Java Spring Boot backend manages the overarching state of users, topologies, experiments, and distributed training jobs. Operating as the central brain of the web stack, this orchestrator persists complex network topologies and historical experiment data within a PostgreSQL relational database. When a user initiates a training simulation, the Spring Boot application serializes the parameters and places a job message onto a Redis Queue, enabling scalable, distributed job dispatching across a cluster of worker nodes. This architecture ensures that the intensive workload of network simulation and neural network backpropagation is entirely offloaded from the web server thread pool, maintaining high availability for incoming API requests.
 
-```bash
-# Clone the repo
-git clone https://github.com/YOUR_USERNAME/CongestionControl.git
-cd CongestionControl
+### The Python FastAPI Sidecar
+Containerized Python FastAPI sidecars orchestrate the localized execution of the NS-3 simulation and the Reinforcement Learning loops. Operating alongside the NS-3 engine within a Docker container, the FastAPI sidecar retrieves jobs from the Redis queue and utilizes `subprocess.Popen` to independently spawn the C++ simulation and Python SAC training binaries. To capture real-time telemetry without instrumenting the underlying C++ physics engine with HTTP overhead, the sidecar intercepts the terminal `stdout` using robust Regex patterns, piping the metrics directly back to the Java orchestrator via WebSockets. Furthermore, the sidecar implements a deterministic graceful shutdown sequence; when a user halts training, the sidecar touches a `.stop_training` file on the OS file system, which the Python RL loop detects mid-step to cleanly abort training, persist the neural network checkpoint to disk, and carefully detach from the Shared Memory block to eradicate the possibility of orphaned zombie processes.
 
-# (Optional) Configure database — default is H2 (no setup needed)
-# For PostgreSQL, copy and edit the example config:
-cp src/main/resources/application.yml.example src/main/resources/application.yml
-# Then edit application.yml with your PostgreSQL credentials
+## 3. The Physics Simulator (NS-3 Engine)
 
-# Build and run
-mvn spring-boot:run
-```
+The simulation engine perfectly replicates accurate, packet-level network physics to provide a realistic training environment for the AI. Built on the NS-3 (Network Simulator 3) engine written in C++ (`sim.cc` and `tcp-rl-env.cc`), the core leverages a custom C++ JSON parser to dynamically instantiate nodes, routers, and links precisely mapped to the React frontend's JSON payloads. These low-level C++ constructs simulate rigorous queue disciplines like FqCoDel (Fair Queuing Controlled Delay) to accurately model router bufferbloat and packet transmission dynamics across configurable bandwidths and propagation delays.
 
-The backend starts at `http://localhost:8080`.
+> [!WARNING]
+> Because traditional TCP transmission rates are highly bursty (forming the classic "TCP Sawtooth" pattern), raw throughput metrics fluctuate violently within microsecond timescales.
 
-**Verify it works:**
-- H2 Console: http://localhost:8080/h2-console (JDBC URL: `jdbc:h2:file:./data/congestion-db`, user: `sa`, no password)
-- API: http://localhost:8080/api/metrics/latest
+To stabilize the mathematical observations fed into the neural network, the C++ engine implements aggressive data smoothing. Over the discrete 40ms simulation timesteps, the engine calculates an Exponential Moving Average (EMA) of both the RTT and the Throughput. This deterministic smoothing acts as a low-pass filter, mitigating the high-frequency noise inherent to the TCP sawtooth, ensuring the Soft Actor-Critic agent receives stable, mathematically coherent state vectors from which to calculate gradients, preventing the policy network from diverging due to extreme variance in the state space.
 
-### 2. Frontend (React)
+## 4. Reinforcement Learning Math & Engine
 
-```bash
-cd frontend
-npm install
-npm start
-```
+The core intelligence is driven by a Soft Actor-Critic (SAC) reinforcement learning algorithm that continuously optimizes network parameters. Sourced from the Stable-Baselines3 library, SAC is explicitly chosen for its off-policy sample efficiency and its profound capability to natively handle continuous action spaces, which is strictly required when granularly modulating numerical values like the Congestion Window. The algorithm explores the state space by injecting Gaussian noise into its policy and exploits learned advantages via entropy regularization, striking a mathematically rigorous balance between discovering new network capabilities and leveraging established optimal transmission paths. The neural network architecture is intrinsically customizable but defaults to a Multi-Layer Perceptron (MLP) mapping policy across two hidden layers of 256 neurons each `[256, 256]`, offering sufficient parameter capacity to map non-linear relationships between latency variance and link capacity.
 
-Opens at `http://localhost:3000`. Connects to backend via WebSocket at `ws://localhost:8080/ws`.
+| Parameter | Value / Configuration | Purpose |
+| :--- | :--- | :--- |
+| **Algorithm** | Soft Actor-Critic (SAC) | Off-policy continuous action space optimization. |
+| **Network Architecture** | MLP `[256, 256]` | Non-linear policy mapping. |
+| **Observation Interval** | 40ms | Dictates the physics simulation discrete timestep. |
+| **Train Frequency** | 4 | Executes network updates every 4 environmental steps. |
+| **Gradient Steps** | 4 | Number of backpropagation passes per update phase. |
+| **Batch Size** | 256 | Number of experience tuples sampled per gradient step. |
+| **Replay Buffer** | 1,000,000 | Stores `(s, a, r, s')` tuples for off-policy sampling. |
 
-### 3. ns-3 Simulation (Linux / macOS / WSL2 only)
+### The Training Loop
+The execution loop coordinates strict timing between observing the physics engine and updating the neural network weights. At a synchronized interval of 40ms, the Python process observes the network state and stores the transition. Operating with a `train_freq` of 4 and `gradient_steps` of 4, the algorithm pulls a highly randomized batch of 256 discrete experiences from a massive 1,000,000-element replay buffer. These parameters guarantee that the twin Q-networks and the policy network undergo symmetrical weight updates, breaking the temporal correlation of sequential network packets and significantly stabilizing the stochastic gradient descent across non-stationary simulated environments.
 
-See [ns3_files/INSTALL.md](ns3_files/INSTALL.md) for detailed instructions.
+### Reward Function & BDP Mathematics
+The reward function mathematically enforces proportional fairness by optimizing around the theoretical Bandwidth-Delay Product (BDP) of the network link. The agent computes its reward by evaluating its proximity to the optimal BDP state—where throughput is completely maximized yet the router queuing delay remains zero. The system heavily penalizes the agent for exceeding this invisible ceiling, effectively computing negative gradients for actions that inflate the queue or precipitate packet drops. By exposing "AGGRESSIVE", "BALANCED", and "CALM" reward gamma profiles, the reward function coefficients can be dynamically shifted, fundamentally altering the agent's objective landscape to prioritize either absolute throughput or pristine, jitter-free latency.
 
-**Quick start:**
-```bash
-# Download ns-3.35 (NOT included in repo — 500MB+)
-wget https://www.nsnam.org/releases/ns-allinone-3.35.tar.bz2
-tar xjf ns-allinone-3.35.tar.bz2
+## 5. POSIX Linux Shared Memory Bridge (IPC)
 
-# Copy project files into ns-3
-cp -r ns3_files/scratch/rl-tcp-inference ns-allinone-3.35/ns-3.35/scratch/
-cp -r ns3_files/contrib/ns3-ai ns-allinone-3.35/ns-3.35/contrib/
+A custom Inter-Process Communication (IPC) bridge achieves extreme throughput between the C++ simulator and the Python AI by operating entirely within shared RAM. Standard HTTP or local Socket connections introduce unacceptable context-switching overhead and latency spikes when executing thousands of observations per second. To circumvent this, the system implements a custom POSIX Linux Shared Memory (SHM) bridge, mapping a highly optimized 1MB block of physical RAM accessible simultaneously by the NS-3 C++ binaries and the Python SAC process. This contiguous memory block employs atomic locks and strict memory barrier semantics to prevent race conditions during concurrent read/write operations.
 
-# Create Python environment
-cd ns-allinone-3.35/ns-3.35
-python3 -m venv ns3env && source ns3env/bin/activate
-pip install stable_baselines3 numpy requests
+> [!IMPORTANT]
+> The lifecycle of a single simulation step relies on precise synchronization across the SHM bridge to pause and resume the C++ engine correctly.
 
-# Build ns-3
-./waf configure --enable-examples && ./waf build
-```
+The execution cycle operates in strict lockstep across the memory bridge. First, the C++ engine computes 40ms of packet physics, atomically writes the resulting state (Throughput, RTT, Loss metrics) to the 1MB RAM block, and forcibly pauses its thread execution. Subsequently, the Python process reads these floats from the RAM block, feeds the state vector through the SAC neural network to predict the next optimal action, and writes the newly calculated `cWnd` float back into the shared memory segment. Finally, the C++ thread detects the memory update, awakens, injects the new congestion window directly into the active TCP socket state machine, and resumes packet simulation, completing the cycle in a fraction of a millisecond.
 
-## Quick Start with Docker (Recommended)
+## 6. Setup & Usage
 
-> **Easiest way to run the entire project on any OS.** Only requires [Docker Desktop](https://www.docker.com/products/docker-desktop/).
+Initializing the application stack requires orchestrating the Docker environment alongside the local Node and Java development servers. The architecture is explicitly designed to isolate the complex C++ build environments from the frontend orchestration logic, meaning the underlying NS-3 simulator and Python dependencies are entirely contained within Docker while the React and Spring Boot servers can be run natively for rapid development.
 
-### Start Backend + Frontend
+1. **Start the Database and Job Queues:**
+   Deploy the underlying PostgreSQL and Redis instances necessary for orchestrating the simulations.
+   ```bash
+   docker-compose up -d postgres redis
+   ```
 
-```bash
-docker-compose up --build
-```
+2. **Build and Run the Simulation Sidecars:**
+   Compile the NS-3 C++ bindings and launch the FastAPI Python containers that house the SAC agent.
+   ```bash
+   docker-compose build engine-sidecar
+   docker-compose up -d engine-sidecar
+   ```
 
-This builds and starts:
-- **Backend** at http://localhost:8080
-- **Frontend** at http://localhost:3000
+3. **Launch the Spring Boot Orchestrator:**
+   Start the Java application to handle REST and WebSocket routing.
+   ```bash
+   cd backend
+   ./mvnw spring-boot:run
+   ```
 
-### Run ns-3 Simulation / Training
+4. **Boot the React Frontend:**
+   Initialize the React application to access the topology canvas and telemetry metrics.
+   ```bash
+   cd frontend
+   npm install
+   npm run start
+   ```
 
-```bash
-# Open an interactive shell inside the ns-3 container
-docker-compose run ns3-sim bash
-
-# Inside the container — set up experiment in backend
-python contrib/ns3-ai/examples/rl-tcp/inference/setup_experiment.py \
-  --backend http://backend:8080/api
-
-# Run inference
-python contrib/ns3-ai/examples/rl-tcp/inference/run_inference.py \
-  --model contrib/ns3-ai/examples/rl-tcp/checkpoints/sac_tcp_1500000_steps.zip \
-  --duration=300 --log_every=20 --post_every=5
-
-# Or run training
-python contrib/ns3-ai/examples/rl-tcp/train_sac.py
-```
-
-> **Note:** First `docker-compose up --build` takes ~15 min (downloads ns-3, builds C++ code). Subsequent runs are instant.
-
----
-
-## Running Without Docker (Manual Setup)
-
-
-
-Open **3 terminals**:
-
-```bash
-# Terminal 1 — Backend
-cd CongestionControl
-mvn spring-boot:run
-
-# Terminal 2 — Frontend
-cd CongestionControl/frontend
-npm start
-
-# Terminal 3 — Inference (inside ns-3 directory)
-cd ns-allinone-3.35/ns-3.35
-source ns3env/bin/activate
-python contrib/ns3-ai/examples/rl-tcp/inference/setup_experiment.py
-python contrib/ns3-ai/examples/rl-tcp/inference/run_inference.py \
-  --model contrib/ns3-ai/examples/rl-tcp/checkpoints/sac_tcp_1500000_steps.zip \
-  --duration=300 --log_every=20 --post_every=5
-```
-
-Then open **http://localhost:3000** to view the live dashboard.
-
-## Windows-Specific Setup
-
-### Install WSL2
-
-```powershell
-# In PowerShell (Admin)
-wsl --install -d Ubuntu-22.04
-```
-
-After restart, open Ubuntu terminal and install dependencies:
-
-```bash
-sudo apt update && sudo apt install -y build-essential gcc g++ python3 python3-pip python3-venv
-```
-
-### What Runs Where
-
-| Component | Runs On | Notes |
-|-----------|---------|-------|
-| Spring Boot Backend | Windows (native) | Needs Java 17+ and Maven |
-| React Frontend | Windows (native) | Needs Node.js 18+ |
-| PostgreSQL | Windows (native) | Alternative to H2 |
-| ns-3 Simulation | WSL2 only | Linux system calls required |
-| Python Inference | WSL2 only | Needs shared memory (SysV) |
-
-### Connecting WSL2 to Windows Backend
-
-From inside WSL2, access the Windows backend at:
-```bash
-# Use localhost (WSL2 automatically bridges to Windows)
-python setup_experiment.py --backend http://localhost:8080/api
-```
-
-### Platform-Specific Files (DO NOT share)
-
-These files are **platform-specific** and must be rebuilt on each machine:
-- `shm_pool.cpython-*.so` — Compiled C extension (rebuild with `python setup.py build_ext --inplace`)
-- `ns3env/` — Python virtual environment (recreate with `python3 -m venv ns3env`)
-- ns-3 `build/` directory — Compiled C++ binaries (rebuild with `./waf build`)
-
-## API Endpoints
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/experiments` | Create experiment |
-| POST | `/api/experiments/{id}/start` | Start experiment |
-| POST | `/api/experiments/{id}/end` | End experiment |
-| GET | `/api/experiments/{id}` | Get experiment |
-| POST | `/api/experiments/{id}/flows` | Create flow |
-| GET | `/api/experiments/{id}/flows` | List flows |
-| GET | `/api/flows/{id}` | Get flow |
-| POST | `/api/flows/{id}/metrics` | Record metric |
-| GET | `/api/flows/{id}/metrics` | Get flow metrics |
-| GET | `/api/metrics/latest` | Latest metrics |
-| GET | `/api/experiments/{id}/metrics` | Experiment metrics |
-| WS | `/ws` | STOMP WebSocket endpoint |
-
-## Project Results
-
-- **Training**: SAC agent trained for **1,500,000 steps** on dumbbell topology
-- **Model**: `ns3_files/contrib/ns3-ai/examples/rl-tcp/checkpoints/sac_tcp_1500000_steps.zip`
-- **Inference Results**: Avg RTT ~124ms, Avg throughput 0.18–0.24 Mbps
-- **Topology**: Dumbbell (2 Mbps bottleneck, 20ms base delay, FqCoDel queue)
-
-## Team
-
-HAJ Research Group
-
-
+To gracefully terminate an active training run, use the "Stop Training" button in the React UI, which securely dispatches the API signal triggering the `.stop_training` file creation, ensuring all neural network weights are safely flushed to your local disk before the containers spin down.
