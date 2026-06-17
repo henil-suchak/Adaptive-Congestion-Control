@@ -186,9 +186,16 @@ void TcpTimeStepEnv::FillEnvData (sTcpRlEnv* envData, size_t index)
 
   if (m_rttSampleNum > 0) {
     double rawRtt_us = m_rttSum.GetMicroSeconds() / (double)m_rttSampleNum;
+    /*
+     * - When ACK arrives: smoothed = ALPHA*new + (1-ALPHA)*smoothed
+     * - On idle step:     smoothedTput = DECAY * smoothedTput (RTT is carried forward EXACTLY)
+     * - Write smoothed values to shared memory instead of raw zeros.
+     *
+     * Result: idle steps carry forward last-known RTT exactly and decay throughput toward 0.
+     */
     m_smoothedRtt_us = EMA_ALPHA * rawRtt_us + (1.0 - EMA_ALPHA) * m_smoothedRtt_us;
   } else {
-    m_smoothedRtt_us = EMA_DECAY * m_smoothedRtt_us;
+    m_smoothedRtt_us = m_smoothedRtt_us;
   }
 
   if (rawTput > 0) {

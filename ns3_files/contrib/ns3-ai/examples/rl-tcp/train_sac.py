@@ -25,6 +25,7 @@ def parse_args():
     p.add_argument("--queue_disc_type", type=str, default="ns3::PfifoFastQueueDisc")
     p.add_argument("--topology_file", type=str, default="")
     p.add_argument("--reward_profile", type=str, default="BALANCED")
+    p.add_argument("--network_arch",  type=str, default="256,256")
     return p.parse_args()
 
 
@@ -113,15 +114,18 @@ def main():
         elif args.reward_profile == "CALM":
             profile_gamma = 0.95
 
+        # Parse network_arch string "256,256,128" -> [256, 256, 128]
+        arch_list = [int(x.strip()) for x in args.network_arch.split(",") if x.strip()]
+
         model = SAC(
             "MlpPolicy", env,
-            learning_rate=1e-4, # Expert recommended lower LR
+            learning_rate=args.learning_rate,
             buffer_size=1_000_000, learning_starts=5_000,
             batch_size=256, train_freq=4, gradient_steps=4, # Restored 1:1 data-to-grad
             gamma=profile_gamma, # 33 steps tracking one RTT loop
             tau=0.01, # Faster soft-target updates
             ent_coef="auto", target_entropy=-0.5, # Exploit fast
-            policy_kwargs=dict(net_arch=[256, 256]), # Removed bottleneck 128
+            policy_kwargs=dict(net_arch=arch_list), 
             verbose=1, device="cpu",
         )
 

@@ -42,9 +42,9 @@ _training_state = {
 _RECONNECT_DELAY = 2.0
 
 # ── Regex patterns for parsing train_sac.py stdout ───────────────────────
-# Pattern: [Step  123456] Ep:5 | cWnd:1234->5678 | ...  | R:0.1234
+# Pattern: [Step  123456] Ep:5 | cWnd:1234->5678 | RTT:1234us | Tput:123.4KB/s | Loss:0 | R:0.1234
 RE_STEP = re.compile(
-    r'\[Step\s+(\d+)\].*Ep:(\d+).*R:([-\d.]+)'
+    r'\[Step\s+(\d+)\].*Ep:(\d+).*RTT:(\d+)us.*Tput:([-\d.]+)KB/s.*R:([-\d.]+)'
 )
 # Pattern: [Episode 5 END] steps=123456 avg_r=0.1234 elapsed=600s
 RE_EPISODE = re.compile(
@@ -154,6 +154,7 @@ def _training_worker(training_run_id, experiment_id, total_timesteps, learning_r
         "--access_delay", str(access_delay),
         "--queue_disc_type", str(queue_type),
         "--reward_profile", str(reward_profile),
+        "--network_arch", str(network_arch),
     ]
 
     if graph_json:
@@ -206,7 +207,9 @@ def _training_worker(training_run_id, experiment_id, total_timesteps, learning_r
             if m:
                 latest_step = int(m.group(1))
                 latest_episode = int(m.group(2))
-                latest_reward = float(m.group(3))
+                latest_rtt = int(m.group(3))
+                latest_tput = float(m.group(4))
+                latest_reward = float(m.group(5))
 
                 _training_state["currentTimestep"] = latest_step
                 _training_state["currentEpisode"] = latest_episode
@@ -219,6 +222,8 @@ def _training_worker(training_run_id, experiment_id, total_timesteps, learning_r
                         "currentTimestep": latest_step,
                         "currentEpisode": latest_episode,
                         "avgReward": latest_reward,
+                        "rttUs": latest_rtt,
+                        "throughputKbps": latest_tput * 8, # convert KB/s to Kbps
                         "totalTimesteps": total_timesteps,
                         "status": "training",
                     }

@@ -18,11 +18,10 @@
  *
  *      THE FIX: Exponential Moving Average smoothing.
  *      - When ACK arrives: smoothed = ALPHA*new + (1-ALPHA)*smoothed
- *      - On idle step:     smoothed = DECAY * smoothed
+ *      - On idle step:     smoothedTput = DECAY * smoothedTput (RTT is carried forward EXACTLY)
  *      - Write smoothed values to shared memory instead of raw zeros.
  *
- *      Result: idle steps carry forward last-known RTT/throughput,
- *      decaying toward 0 only after ~250ms of true silence.
+ *      Result: idle steps carry forward last-known RTT exactly and decay throughput toward 0.
  */
 
 #include <algorithm>
@@ -124,7 +123,7 @@ TcpTimeStepEnv::ScheduleNextStateRead ()
   // m_timeStep=10ms < RTT=40ms), blend into a smoothed signal that persists
   // across idle steps and only decays after prolonged silence (~250ms).
 
-  if (m_rttSampleNum > 0)
+    if (m_rttSampleNum > 0)
     {
       // ACK(s) arrived this step — update EMA with new sample
       m_smoothedRtt_us = EMA_ALPHA * rawRtt_us  + (1.0 - EMA_ALPHA) * m_smoothedRtt_us;
@@ -132,8 +131,12 @@ TcpTimeStepEnv::ScheduleNextStateRead ()
     }
   else
     {
-      // No ACKs this step (idle) — decay toward 0 slowly
-      m_smoothedRtt_us *= EMA_DECAY;
+      // No ACKs this step (idle)
+      // FIX: Do NOT decay RTT toward 0! A network path doesn't get faster just because we are idle.
+      // We carry forward the last known RTT exactly.
+      m_smoothedRtt_us = m_smoothedRtt_us;
+      
+      // Throughput DOES decay toward 0, because 0 packets arrived.
       m_smoothedTput   *= EMA_DECAY;
     }
 

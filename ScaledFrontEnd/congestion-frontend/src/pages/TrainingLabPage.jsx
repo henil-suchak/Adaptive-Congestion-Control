@@ -3,6 +3,7 @@ import { ExperimentService, TrainingService } from '../services/api';
 import { TopologyService } from '../services/topologyApi';
 import SockJS from 'sockjs-client';
 import { Client } from '@stomp/stompjs';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 
 export default function TrainingLabPage() {
   // ── Topology Config ──────────────────────────────────────────
@@ -26,6 +27,7 @@ export default function TrainingLabPage() {
   const [activeRun, setActiveRun] = useState(null);
   const [trainingRuns, setTrainingRuns] = useState([]);
   const [rewardHistory, setRewardHistory] = useState([]);
+  const [metricsData, setMetricsData] = useState([]);
   const stompRef = useRef(null);
   const canvasRef = useRef(null);
 
@@ -164,6 +166,17 @@ export default function TrainingLabPage() {
               }]);
             }
 
+            if (data.rttUs !== undefined && data.throughputKbps !== undefined) {
+              setMetricsData(prev => {
+                const newData = [...prev, {
+                  step: data.currentTimestep,
+                  rttMs: data.rttUs / 1000.0,
+                  throughputMbps: data.throughputKbps / 1000.0,
+                }];
+                return newData.slice(-100); // Keep last 100 points
+              });
+            }
+
             if (data.status === 'completed' || data.status === 'failed') {
               loadTrainingRuns();
             }
@@ -235,6 +248,7 @@ export default function TrainingLabPage() {
       );
       setActiveRun(run);
       setRewardHistory([]);
+      setMetricsData([]);
       setStatus(`Training started! Run #${run.id} queued.`);
       loadTrainingRuns();
 
@@ -483,8 +497,26 @@ export default function TrainingLabPage() {
             ref={canvasRef}
             width={820}
             height={250}
-            style={{ width: '100%', borderRadius: '8px' }}
+            style={{ width: '100%', borderRadius: '8px', marginBottom: '20px' }}
           />
+
+          {/* Real-time Metrics Chart (RTT & Tput) */}
+          {metricsData.length > 0 && (
+            <div style={{ width: '100%', height: '250px', marginBottom: '20px', background: '#0f172a', borderRadius: '8px', padding: '10px' }}>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={metricsData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#334155" />
+                  <XAxis dataKey="step" stroke="#94a3b8" />
+                  <YAxis yAxisId="left" orientation="left" stroke="#22d3ee" domain={['auto', 'auto']} />
+                  <YAxis yAxisId="right" orientation="right" stroke="#10b981" domain={['auto', 'auto']} />
+                  <Tooltip contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155' }} />
+                  <Legend />
+                  <Line yAxisId="left" type="monotone" dataKey="throughputMbps" stroke="#22d3ee" dot={false} name="Throughput (Mbps)" isAnimationActive={false} />
+                  <Line yAxisId="right" type="monotone" dataKey="rttMs" stroke="#10b981" dot={false} name="RTT (ms)" isAnimationActive={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )}
 
           {/* Stop Button */}
           {isTraining && (
